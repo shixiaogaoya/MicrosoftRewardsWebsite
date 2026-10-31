@@ -4,8 +4,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { handleAlarmStep, startSearches, stopSearches } from './searchRunner';
-import { getStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
+import { beginRun } from './taskRun';
+import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
+import { PROGRESS_KEY, type RunProgress } from '@/entrypoints/utils/runState';
 
 const ALARM = { name: 'openTabAlarm' };
 
@@ -14,6 +16,16 @@ async function seed(values: Record<string, unknown>): Promise<void> {
     { active: true, searches: 5, timeout: 60, closeTime: 5, openFirstResult: false, ...values },
     StorageValues.SYNC
   );
+}
+
+// A search step only runs inside a round, and it reads the count, gap and close
+// time from the snapshot that round froze — not from the live settings.
+async function startRound(opened = 0): Promise<number> {
+  const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+  if (opened > 0) {
+    await setStorageItem(PROGRESS_KEY, { opened, total: 5, isSearching: true }, StorageValues.LOCAL);
+  }
+  return run.id;
 }
 
 describe('searchRunner', () => {
@@ -27,11 +39,14 @@ describe('searchRunner', () => {
       const create = vi.spyOn(fakeBrowser.tabs, 'create');
       await seed({});
 
-      await startSearches(60, 5, 5);
+      const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      await startSearches(run.id, { searches: 5, timeout: 60, closeTime: 5 });
 
       expect(create).toHaveBeenCalledTimes(1);
-      expect(await getStorageItem<number>('currentSearch', StorageValues.SYNC)).toBe(1);
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(true);
+      expect(await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL)).toMatchObject({
+        opened: 1,
+        isSearching: true,
+      });
     });
   });
 
@@ -47,34 +62,40 @@ describe('searchRunner', () => {
 
     it('opens the next tab and advances the recorded progress', async () => {
       const create = vi.spyOn(fakeBrowser.tabs, 'create');
-      await seed({ currentSearch: 1, isSearching: true });
+      await seed({});
+      await startRound(1);
 
       await handleAlarmStep(ALARM);
 
       expect(create).toHaveBeenCalledTimes(1);
-      expect(await getStorageItem<number>('currentSearch', StorageValues.SYNC)).toBe(2);
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(true);
+      expect(await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL)).toMatchObject({
+        opened: 2,
+        isSearching: true,
+      });
     });
 
     it('records the final search before ending the run', async () => {
       // Regression: the last step used to end the run without storing the count,
       // so the popup froze at 4/5 even though 5 searches had run.
-      await seed({ currentSearch: 4, isSearching: true });
+      await seed({});
+      await startRound(4);
 
       await handleAlarmStep(ALARM);
 
-      expect(await getStorageItem<number>('currentSearch', StorageValues.SYNC)).toBe(5);
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(false);
+      const progress = await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL);
+      expect(progress?.opened).toBe(5);
+      expect(progress?.isSearching).toBe(false);
     });
 
     it('opens no more tabs once every search has run', async () => {
       const create = vi.spyOn(fakeBrowser.tabs, 'create');
-      await seed({ currentSearch: 5, isSearching: true });
+      await seed({});
+      await startRound(5);
 
       await handleAlarmStep(ALARM);
 
       expect(create).not.toHaveBeenCalled();
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(false);
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
     });
 
     it('stops instead of searching when "Daily searches" is turned off', async () => {
@@ -82,24 +103,40 @@ describe('searchRunner', () => {
       // tabs after the user unchecked it (alarms survive a browser restart), so
       // a daily-set-only setup still made searches.
       const create = vi.spyOn(fakeBrowser.tabs, 'create');
-      await seed({ active: false, currentSearch: 1, isSearching: true });
+      await seed({ active: false });
+      await startRound(1);
 
       await handleAlarmStep(ALARM);
 
       expect(create).not.toHaveBeenCalled();
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(false);
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
       expect(await fakeBrowser.alarms.getAll()).toEqual([]);
+    });
+
+    it('keeps using the count frozen at the start when the setting changes mid-run', async () => {
+      const create = vi.spyOn(fakeBrowser.tabs, 'create');
+      await seed({});
+      const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
+      await setStorageItem('searches', 1, StorageValues.SYNC);
+
+      await handleAlarmStep(ALARM);
+
+      expect(create).toHaveBeenCalledTimes(1);
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.opened).toBe(2);
+      expect(run.started).toBe(true);
     });
   });
 
   describe('stopSearches', () => {
     it('clears the running flag and any pending alarm', async () => {
-      await seed({ isSearching: true });
+      await seed({});
+      await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
       fakeBrowser.alarms.create('openTabAlarm', { delayInMinutes: 1 });
 
       await stopSearches();
 
-      expect(await getStorageItem<boolean>('isSearching', StorageValues.SYNC)).toBe(false);
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
       expect(await fakeBrowser.alarms.get('openTabAlarm')).toBeUndefined();
     });
 
@@ -122,7 +159,10 @@ describe('searchRunner', () => {
       vi.useFakeTimers();
       try {
         const create = vi.spyOn(fakeBrowser.tabs, 'create');
-        await seed({ currentSearch: 1, isSearching: true, timeout: 5 });
+        await seed({});
+        const run = await beginRun(['search'], { searches: 5, timeout: 5, closeTime: 5 });
+        await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
+        expect(run.started).toBe(true);
 
         await handleAlarmStep(ALARM);
         expect(create).toHaveBeenCalledTimes(1);
@@ -131,7 +171,7 @@ describe('searchRunner', () => {
         await vi.advanceTimersByTimeAsync(6_000);
 
         expect(create).toHaveBeenCalledTimes(2);
-        expect(await getStorageItem<number>('currentSearch', StorageValues.SYNC)).toBe(3);
+        expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.opened).toBe(3);
       } finally {
         vi.useRealTimers();
       }
@@ -140,7 +180,9 @@ describe('searchRunner', () => {
     // The timer above dies with the service worker, so an alarm is armed at the
     // 30s platform minimum to resume the run rather than let it stall.
     it('still arms a backstop alarm for a sub-30s gap', async () => {
-      await seed({ currentSearch: 1, isSearching: true, timeout: 5 });
+      await seed({});
+      await beginRun(['search'], { searches: 5, timeout: 5, closeTime: 5 });
+      await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
 
       const before = Date.now();
       await handleAlarmStep(ALARM);
@@ -154,7 +196,9 @@ describe('searchRunner', () => {
       vi.useFakeTimers();
       try {
         const create = vi.spyOn(fakeBrowser.tabs, 'create');
-        await seed({ currentSearch: 1, isSearching: true, timeout: 60 });
+        await seed({});
+        await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+        await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
 
         await handleAlarmStep(ALARM);
         await vi.advanceTimersByTimeAsync(120_000);
@@ -173,7 +217,8 @@ describe('searchRunner', () => {
     it('registers each search tab for the durable sweep', async () => {
       await seed({});
 
-      await startSearches(60, 5, 5);
+      const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      await startSearches(run.id, { searches: 5, timeout: 60, closeTime: 5 });
 
       const tracked = await getStorageItem<Record<string, number>>('trackedTabs', StorageValues.LOCAL);
       expect(Object.keys(tracked ?? {})).toHaveLength(1);

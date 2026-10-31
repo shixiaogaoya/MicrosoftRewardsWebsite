@@ -2,6 +2,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { clearTrackedTabs, isCleanupAlarm, sweepStaleTabs, trackTab, untrackTab } from './tabCleanup';
+import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
+import { StorageValues } from '@/entrypoints/enums/storageValues';
+import { RESULTS_KEY, RUN_KEY, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
 
 const CLEANUP_ALARM = 'closeStaleTabs';
 
@@ -40,6 +43,22 @@ describe('tabCleanup', () => {
     await sweepStaleTabs();
 
     expect(await openTabIds()).not.toContain(tabId);
+  });
+
+  it('settles a dashboard run once its tracked tab is past the deadline and gone', async () => {
+    await fakeBrowser.tabs.create({ url: 'https://rewards.bing.com/' });
+    const [tabId] = await openTabIds();
+    await trackTab(tabId, 5000);
+    await setStorageItems({
+      [RUN_KEY]: { id: 9, phase: 'running', search: false, daily: true, claim: false },
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('unconfirmed');
   });
 
   it('leaves a tracked tab alone while its deadline is in the future', async () => {
@@ -104,5 +123,118 @@ describe('tabCleanup', () => {
   it('recognises only its own alarm', () => {
     expect(isCleanupAlarm(CLEANUP_ALARM)).toBe(true);
     expect(isCleanupAlarm('openTabAlarm')).toBe(false);
+  });
+
+  // Regression: track/untrack/sweep each read the registry, await, then write the
+  // whole snapshot back. Two overlapping writes used to let the older snapshot
+  // replace the newer one, so a tab registered in between was lost and never closed.
+  describe('overlapping registry writes', () => {
+    let gates: Array<(resume: () => void) => void>;
+
+    beforeEach(() => {
+      gates = [];
+      const realGet = fakeBrowser.storage.local.get.bind(fakeBrowser.storage.local);
+      vi.spyOn(fakeBrowser.storage.local, 'get').mockImplementation((keys: any) => {
+        const pending = realGet(keys);
+        if (gates.length === 0) return pending;
+        const release = gates.shift()!;
+        return pending.then((value) => new Promise((resolve) => release(() => resolve(value))));
+      });
+    });
+
+    // The next registry read pauses after it has its snapshot, until the test
+    // lets it continue — so two operations can be held on the same old snapshot.
+    function holdNextRead(): Promise<() => void> {
+      return new Promise((resolve) => {
+        gates.push(resolve);
+      });
+    }
+
+    async function registry(): Promise<Record<string, number>> {
+      return (await getStorageItem<Record<string, number>>('trackedTabs', StorageValues.LOCAL)) ?? {};
+    }
+
+    it('keeps both tabs when two registrations overlap', async () => {
+      const firstHeld = holdNextRead();
+      const secondHeld = holdNextRead();
+      const first = trackTab(1, 5000);
+      const second = trackTab(2, 5000);
+      (await firstHeld)();
+      (await secondHeld)();
+
+      await Promise.all([first, second]);
+
+      expect(Object.keys(await registry()).sort()).toEqual(['1', '2']);
+    });
+
+    it('keeps a tab registered while another is being untracked', async () => {
+      await trackTab(1, 5000);
+      const untrackHeld = holdNextRead();
+      const trackHeld = holdNextRead();
+      const dropping = untrackTab(1);
+      const adding = trackTab(2, 5000);
+      (await untrackHeld)();
+      (await trackHeld)();
+
+      await Promise.all([dropping, adding]);
+
+      const ids = Object.keys(await registry());
+      expect(ids).not.toContain('1');
+      expect(ids).toContain('2');
+    });
+
+    it('keeps a tab registered while a sweep writes its snapshot back', async () => {
+      await openTab(1);
+      const [tabId] = await openTabIds();
+      await trackTab(tabId, 5000);
+      vi.setSystemTime(new Date('2026-08-21T10:00:06Z'));
+
+      const sweepHeld = holdNextRead();
+      const trackHeld = holdNextRead();
+      const sweeping = sweepStaleTabs();
+      const adding = trackTab(2, 60000);
+      (await sweepHeld)();
+      (await trackHeld)();
+
+      await Promise.all([sweeping, adding]);
+
+      const ids = Object.keys(await registry());
+      expect(ids).not.toContain(String(tabId));
+      expect(ids).toContain('2');
+      expect(await openTabIds()).not.toContain(tabId);
+    });
+  });
+
+  // Creating the sweep alarm on every registration resets its schedule. Once it
+  // exists, further registrations only need to know it is still there.
+  it('does not reschedule the sweep alarm when one is already armed', async () => {
+    await trackTab(1, 5000);
+    const alarm = await fakeBrowser.alarms.get(CLEANUP_ALARM);
+
+    vi.setSystemTime(new Date('2026-08-21T10:00:30Z'));
+    await trackTab(2, 5000);
+
+    expect(await fakeBrowser.alarms.get(CLEANUP_ALARM)).toEqual(alarm);
+  });
+
+  it('reports a failed registration and still accepts the next one', async () => {
+    vi.spyOn(fakeBrowser.storage.local, 'set').mockRejectedValueOnce(new Error('storage write failed'));
+
+    await expect(trackTab(1, 5000)).rejects.toThrow('storage write failed');
+    await trackTab(2, 5000);
+
+    const tracked = await getStorageItem<Record<string, number>>('trackedTabs', StorageValues.LOCAL);
+    expect(Object.keys(tracked ?? {})).toEqual(['2']);
+  });
+
+  it('leaves a tab the extension never registered open', async () => {
+    await openTab(1);
+    const [tabId] = await openTabIds();
+    await setStorageItem('trackedTabs', { 4242: Date.now() - 1000 }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:00:06Z'));
+    await sweepStaleTabs();
+
+    expect(await openTabIds()).toContain(tabId);
   });
 });

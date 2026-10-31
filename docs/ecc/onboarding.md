@@ -1,5 +1,7 @@
 # Onboarding — Microsoft Automatic Rewards
 
+> 历史背景：这篇是 WXT 迁移前的入门说明，其中 `chrome/src`、`firefox/src` 和根目录 `npm run build` 已不是现行路径。现在只改 `wxt/`，命令是 `npm --prefix wxt run compile|test|build|build:firefox`。本地加载方式和间隔 0、关闭时间 0 的含义见仓库根目录 [README.md](../../README.md)。
+
 > For a new engineer joining this project. Read this first, then `architecture.md` and `tech_stack.md`.
 
 ## What this project is

@@ -1,6 +1,8 @@
 import { browser } from 'wxt/browser';
 import { getStorageItem, setStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
+import { RUN_KEY, type TaskRunState } from '@/entrypoints/utils/runState';
+import { endRun, recordResult } from './taskRun';
 
 // Tab ids the extension opened, each mapped to the wall-clock time by which it
 // must be gone.
@@ -21,33 +23,75 @@ export function isCleanupAlarm(name: string): boolean {
 // service worker: it is torn down after ~30s idle, taking pending timers and
 // runtime-registered tab listeners with it, which is why search and daily-set
 // tabs used to pile up. Alarms survive that teardown, so the sweep does not.
-export async function trackTab(tabId: number, closeAfterMs: number): Promise<void> {
-    const tracked = await readRegistry();
-    await writeRegistry({ ...tracked, [tabId]: Date.now() + closeAfterMs });
-    browser.alarms.create(CLEANUP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
+export function trackTab(tabId: number, closeAfterMs: number): Promise<void> {
+    return enqueue(async () => {
+        const tracked = await readRegistry();
+        await writeRegistry({ ...tracked, [tabId]: Date.now() + closeAfterMs });
+        await ensureSweepAlarm();
+    });
 }
 
 // Called once a tab has closed on time, so the sweep has nothing left to do.
-export async function untrackTab(tabId: number): Promise<void> {
-    const tracked = await readRegistry();
-    if (!(String(tabId) in tracked)) return;
-    await saveRemaining(without(tracked, tabId));
+export function untrackTab(tabId: number): Promise<void> {
+    return enqueue(async () => {
+        const tracked = await readRegistry();
+        if (!(String(tabId) in tracked)) return;
+        await saveRemaining(without(tracked, tabId));
+    });
 }
 
-export async function sweepStaleTabs(): Promise<void> {
-    const entries = Object.entries(await readRegistry());
-    const now = Date.now();
-    const due = entries.filter(([, deadline]) => deadline <= now);
-    const remaining = Object.fromEntries(entries.filter(([, deadline]) => deadline > now));
+export function sweepStaleTabs(): Promise<void> {
+    return enqueue(async () => {
+        const entries = Object.entries(await readRegistry());
+        const now = Date.now();
+        const due = entries.filter(([, deadline]) => deadline <= now);
+        const remaining = Object.fromEntries(entries.filter(([, deadline]) => deadline > now));
 
-    await Promise.all(due.map(([tabId]) => closeTab(Number(tabId))));
-    await saveRemaining(remaining);
+        await Promise.all(due.map(([tabId]) => closeTab(Number(tabId))));
+        await saveRemaining(remaining);
+        // The in-worker lifetime timer is gone after a worker restart, so a
+        // dashboard whose deadline has passed would otherwise stay `running`.
+        // Closing the tab is not enough: the result has to be written too.
+        if (due.length > 0) await settleDashboardIfGone();
+    });
+}
+
+async function settleDashboardIfGone(): Promise<void> {
+    const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+    if (!run || run.phase === 'stopping') return;
+    const kinds = (['daily', 'claim'] as const).filter((kind) => run[kind]);
+    if (kinds.length === 0) return;
+    const open = await browser.tabs.query({ url: 'https://rewards.bing.com/*' });
+    if (open.length > 0) return;
+    for (const kind of kinds) {
+        await recordResult(run.id, kind, { status: 'unconfirmed', reason: '页面未在时限内返回结果' });
+        await endRun(run.id, kind);
+    }
 }
 
 // Tab ids do not survive a browser restart, so a registry carried over from the
 // previous session points at tabs that no longer exist.
-export async function clearTrackedTabs(): Promise<void> {
-    await saveRemaining({});
+export function clearTrackedTabs(): Promise<void> {
+    return enqueue(() => saveRemaining({}));
+}
+
+// One chain for every read-modify-write of the registry. A second call that
+// arrives while the first is still awaiting its snapshot has to wait, or the
+// older snapshot is written back over the newer registration. A failure is
+// reported to that caller and then dropped here, so the next operation still runs.
+let registryChain: Promise<void> = Promise.resolve();
+
+function enqueue(operation: () => Promise<void>): Promise<void> {
+    const run = registryChain.then(operation, operation);
+    registryChain = run.then(() => {}, () => {});
+    return run;
+}
+
+// Creating the alarm again replaces it and restarts its period, so a tab that is
+// registered while a sweep is already armed must leave the existing schedule alone.
+async function ensureSweepAlarm(): Promise<void> {
+    if (await browser.alarms.get(CLEANUP_ALARM)) return;
+    browser.alarms.create(CLEANUP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
 }
 
 async function readRegistry(): Promise<TrackedTabs> {

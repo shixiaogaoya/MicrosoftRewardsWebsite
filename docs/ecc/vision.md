@@ -29,6 +29,7 @@ free (with a donation link) via the Chrome Web Store, Firefox Add-ons, and as an
 
 ## Non-goals
 
+- 现行扩展不向作者网站回报安装、卸载或帮助点击；帮助只在用户主动打开说明时发生。下面这句是迁移前的记录。
 - No analytics/telemetry back to the author (aside from external help/uninstall page
   hits). **Needs Verification.**
 - No handling or storage of Microsoft credentials — login happens in the browser/WebView.

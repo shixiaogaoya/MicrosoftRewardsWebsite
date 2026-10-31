@@ -1,109 +1,77 @@
-# Search automatic rewards
+# Rewards 助手
 
-![banner](docs/images/banner.png)
+基于 [spin311/MicrosoftRewardsWebsite](https://github.com/spin311/MicrosoftRewardsWebsite) 的浏览器扩展，MIT 许可，Copyright (c) 2024 spin311。界面默认简体中文，没有推广卡片、二维码或捐赠入口。
 
-Get the most out of your Microsoft rewards account and earn points every day!
+扩展按已保存的设置，在 Bing 上发起搜索，并可以打开 Microsoft Rewards 处理每日活动和领取积分。浏览器语言是英文时，弹窗同样显示简体中文。
 
-If you like the extension, please give it a star on GitHub! <img src="docs/images/github-star.png" alt="icon" height="32">
+## 主界面
 
-## Download
+打开弹窗后可以直接开始，不需要先展开高级设置。
 
-[Google Chrome Store](https://chromewebstore.google.com/detail/microsoft-automatic-rewar/ocmmbfdhomnkljmjkmafegefcgcfkefo)  
+- 状态行：准备就绪、正在执行、正在停止、已停止，或有结果待确认。
+- 一个主按钮：静止时是「开始任务」，运行中是「停止任务」。停止收尾时按钮显示「正在停止」并暂时不可按，收尾结束前不会显示成功。
+- 本轮已经打开过搜索标签页时，显示「已发起 X/Y 次搜索」和进度条。还没执行过时不显示空进度。
+- 「每日自动执行」是总开关。关闭后，定时检查和浏览器启动都不会自己开始；正在进行的这一轮继续，要中止请按「停止任务」。
+- 「高级设置」默认折叠，里面是执行哪些任务、搜索次数、间隔、标签页关闭时间、账号等级预设，以及是否打开首个搜索结果。
+- 底部只有两个链接：「打开 Rewards」前往 https://rewards.bing.com/ ，「帮助」打开本说明。需要帮助时由用户自己点击，安装时不会自动打开网页。
 
-[Firefox Store](https://addons.mozilla.org/en-US/firefox/addon/microsoft-automatic-rewards/)
+账号等级预设只在用户主动更换时，才把搜索次数改成会员 5、银级 10 或金级 20。打开弹窗不会用预设覆盖已经保存的次数。
 
-[Mobile app](https://github.com/spin311/MicrosoftRewardsWebsite/releases/tag/app)
+## 一次运行是什么意思
 
-  If you enjoy the extension, 5-star rating would mean a lot:) <img src="docs/images/stars5.jpeg" alt="5 Stars" height="16">
+「已发起 X/Y 次搜索」只表示本轮已经打开了多少个 Bing 搜索标签页，不表示这些搜索已经获得积分。
 
-## Donate <img src="docs/images/justAGirl.png" alt="Cat" height="64">
+「已完成流程」表示扩展把该任务的步骤走完了，例如搜索标签页已按计划打开，或领取确认控件变为不可点、领取弹层已关闭。它不是 Microsoft 的到账回执。每日活动把卡片都点完后仍是「结果待确认」，因为页面没有完成标记。
 
-Donations help me make tools like this for free in my spare time. Any amount helps! ❤️
+「结果待确认」表示步骤没有得到可核对的完成状态，例如页面没有完成标记、超时未返回，或浏览器在中途重启。这不是成功，也不会被当天的自动检查重新开始；可以在「查看详情」里重试这一项。
 
-[![Donate with PayPal button](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=4WXEWMN3QGLGY)
+失败项的「重试此任务」只出现在展开的详情里。技术错误留在详情的原因说明中。
 
+停止只结束当前这一轮：不再打开新的搜索标签页，并把还没有结果的任务记为已取消。它不修改「每日自动执行」和各项任务开关。
 
+运行开始时会记下当时的搜索次数、间隔和关闭时间。运行中再改这些设置，只影响下一轮。
 
-## Features
+## 设置
 
-![Popup Screenshot](docs/images/help3.png)
+设置保存在浏览器同步存储里，会随浏览器账号同步。本机进度、本轮结果和当天是否已经尝试过，保存在本机存储，不跟随同步。
 
-1. Open 10 random tabs in Bing and close them once they are loaded.
-2. Automatically open tabs every day when the browser is opened (turned on by default).
-3. Choose duration between tabs opening in seconds (choose 0 to open all tabs at the same time).
-4. Number of searches
-5. Time in seconds before tab gets closed (choose 0 to close when loaded)
-6. GitHub page with code and documentation
-7. Visit the Microsoft Rewards site and log in.
-8. [Donate with PayPal or any credit card](https://www.paypal.com/donate/?hosted_button_id=4WXEWMN3QGLGY).
+| 项目 | 范围 | 说明 |
+| --- | --- | --- |
+| 搜索次数 | 1～999 的整数 | 本轮计划打开的搜索标签页数。 |
+| 搜索间隔 | 0～9999 的整数秒 | 两次搜索之间的目标间隔。填 0 不会一次打开全部标签页：实际最少大约相隔 1 秒，并带少量随机波动。短于 30 秒时界面会提示可能不计积分，但不会偷偷改成更大的值。30 秒及以上交给浏览器定时器；更短的间隔用页面内计时，浏览器把后台挂起时可能退回到约 30 秒。 |
+| 标签页关闭时间 | 0～300 的整数秒 | 搜索页加载完成后，再等待这么久才关闭。0 表示加载完成后就关闭，实际会留零点几秒。 |
 
-<img src="docs/images/pin.png" alt="Pin extension" height="64">
+输入框可以暂时清空。空值、小数、负数和超出范围的值会提示，并且不会写入存储。已经存在的无效旧值，在读取时按该字段的默认值处理：搜索次数 5、间隔 60 秒、关闭时间 5 秒。
 
-Make sure to pin the extension.
+## 每日自动与浏览器重启
 
-## Project structure
+「每日自动执行」打开，并且至少选了一项任务时，扩展大约每 6 小时检查一次，也会在浏览器启动时检查。当天某一项已经尝试过，不论结果是完成、失败、取消还是待确认，自动检查都不会再跑这一项。手动「开始任务」或详情里的重试不受这个限制。
 
-The browser extension is built with [WXT](https://wxt.dev/) and React. One
-codebase produces both the Chrome (MV3) and Firefox (MV2) builds — there is no
-longer a separate source tree per browser.
+浏览器重启会结束没有完成的搜索。重启前还在进行的任务记为「结果待确认」，原因是浏览器已重启；不会接着上次的标签页继续。若每日自动仍开启且当天还没有尝试过，启动检查可以开始新的一轮。
 
-```
-/wxt                        - Browser extension (WXT + React + TypeScript)
-  /entrypoints
-    background.ts           - Background service worker entry
-    /background             - Daily rewards, scheduling, search runner
-    rewards.content.ts      - Content script on rewards.bing.com
-    bingResult.content.ts   - Content script on Bing search results
-    /popup                  - Popup UI (React)
-    /components             - Shared React components
-    /hooks                  - React hooks (storage, search progress)
-    /utils                  - Search, progress, settings, helpers
-    /data                   - Search term pool
-    /enums, /types          - Shared TypeScript definitions
-  /public                   - Static assets copied into the build (icons)
-  wxt.config.ts             - Manifest and build configuration
-/microsoft_rewards_app      - Android app (Flutter)
-/assets                     - Source icon artwork (icon.svg)
-/scripts                    - Maintenance scripts (icon rasterization)
-/docs                       - Documentation and README images
-```
+## 开发与本地加载
 
-## Development
-
-All extension commands run from the `wxt` directory:
+扩展源码在 `wxt/`，一套代码同时构建 Chrome（MV3）和 Firefox（MV2）。命令从仓库根目录执行：
 
 ```bash
-cd wxt
-npm install
+npm --prefix wxt install
 
-npm run dev              # Chrome, hot reload
-npm run dev:firefox      # Firefox, hot reload
+npm --prefix wxt run dev
+npm --prefix wxt run dev:firefox
 
-npm run compile          # TypeScript typecheck
-npm run test             # Unit tests (Vitest)
+npm --prefix wxt run compile
+npm --prefix wxt run test
 
-npm run build            # Production build -> wxt/dist/chrome-mv3
-npm run build:firefox    # Production build -> wxt/dist/firefox-mv2
-npm run zip              # Packaged zip for store upload
-npm run zip:firefox
+npm --prefix wxt run build
+npm --prefix wxt run build:firefox
 ```
 
-Build output lives in `wxt/dist` and is **not** committed — releases are
-published to the web stores and to GitHub Releases.
+Chrome：构建完成后打开 `chrome://extensions`，启用开发者模式，选择「加载已解压的扩展程序」，目录为 `wxt/dist/chrome-mv3`。
 
-To load an unpacked development build: run `npm run build`, then in Chrome open
-`chrome://extensions`, enable Developer mode, and "Load unpacked" from
-`wxt/dist/chrome-mv3`.
+Firefox：打开 `about:debugging#/runtime/this-firefox`，选择「临时载入附加组件」，选中 `wxt/dist/firefox-mv2/manifest.json`。
 
-### Legacy code
+构建产物在 `wxt/dist`，不提交到仓库。
 
-Versions before the WXT rewrite used hand-written `chrome/` and `firefox/`
-source trees with committed compiled output. That code has been removed from
-the default branch and preserved on the [`legacy`](https://github.com/spin311/MicrosoftRewardsWebsite/tree/legacy)
-branch. Nothing on the default branch depends on it.
+## 许可
 
-## Contact
-
-If you have any suggestions or questions, you can contact me at [spin311pro@gmail.com](mailto:spin311pro@gmail.com).
-
-Enjoy your rewards! 😊
+MIT License. Copyright (c) 2024 spin311.

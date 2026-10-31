@@ -1,22 +1,34 @@
 import { browser } from 'wxt/browser';
 
 interface ManualClaimButtonProps {
-    isSearching: boolean;
+    isRunning: boolean;
+    isStopping: boolean;
+    canStart: boolean;
+    disabled: boolean;
+    onStop: () => void;
 }
 
-// "Get rewards" starts a run; while one is running it flips to "Stop searches".
-// The background owns the run state, so this button is purely controlled: it
-// sends the request and lets the state come back through storage — a local
-// optimistic flip could disagree with a run that never actually started (a
-// daily-set-only run makes no searches).
-function ManualClaimButton({ isSearching }: ManualClaimButtonProps) {
+// Starts the selected tasks, or stops the round that is running. The background
+// owns that state, so this button only sends the request. Auto-run being off
+// does not disable it: that switch only stops the alarm and startup from
+// starting a round on their own.
+function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }: ManualClaimButtonProps) {
     function handleClick() {
-        browser.runtime.sendMessage({ action: isSearching ? 'stop' : 'popup' });
+        if (disabled || (!isRunning && !canStart)) return;
+        if (isRunning) onStop();
+        browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' });
     }
 
+    const label = isStopping ? '正在停止' : isRunning ? '停止任务' : '开始任务';
     return (
-        <button id="button" className={`btn my-1 ${isSearching ? 'btn-fail' : 'btn-success'}`} onClick={handleClick}>
-            {isSearching ? 'Stop searches' : 'Get rewards'}
+        <button
+            id="button"
+            className={`btn action-button my-1 ${isRunning ? 'btn-fail' : 'btn-success'}`}
+            onClick={handleClick}
+            disabled={disabled || (!isRunning && !canStart)}
+            aria-disabled={disabled || (!isRunning && !canStart)}
+        >
+            {label}
         </button>
     );
 }

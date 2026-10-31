@@ -24,17 +24,13 @@ Prioritized, non-binding. Grouped by horizon. Avoids rewrites; each item is incr
 
 ## Medium-term (weeks)
 
-5. **De-duplicate Chrome/Firefox logic.** Extract the shared core (words list, search
-   URL building, scheduling math) into one typed module consumed by both, keeping only
-   the `chrome.*`/`browser.*` shim per target. *(Trade-off: introduces a build step /
-   light bundler; pays off every time behavior changes — today it must be edited twice.)*
-6. **Add a test suite.** Unit-test the pure helpers (`getRandomNumber`, query building,
-   `checkLastOpened` date logic) and the mobile `SearchRepositoryImpl` / BLoC with
-   `bloc_test`. Target the 80% bar on new/changed code first, not retroactively.
+> ✅ **5、6、8 已由 WXT 迁移完成。** Chrome 与 Firefox 共用 `wxt/`，不再分两套源码；单元测试在 `wxt/entrypoints/**/*.test.ts`；非法数字不再被 `parseInt(...) ?? default` 放过，读写都走 `wxt/entrypoints/utils/settings.ts` 的范围校验。第 7 项仍未完成。
+
+5. **De-duplicate Chrome/Firefox logic.** ✅ 完成：WXT 单代码库同时构建 Chrome MV3 与 Firefox MV2。
+6. **Add a test suite.** ✅ 扩展侧已有 Vitest。移动应用的 `bloc_test` 不在本次范围。
 7. **Harden the Bing DOM dependency.** The daily-set selectors are brittle. Add a
    fallback/logging path so a Microsoft markup change fails loudly, not silently.
-8. **Fix or formally accept the `parseInt(x) ?? DEFAULT` bug** with a test that pins the
-   chosen behavior.
+8. **Fix or formally accept the `parseInt(x) ?? DEFAULT` bug.** ✅ 完成：非法或越界值使用该字段默认值，范围内的整数原样保留。
 
 ## Long-term (months)
 

@@ -4,9 +4,9 @@ interface AccountLevelSelectProps {
 }
 
 const LEVELS: { value: string; label: string }[] = [
-    { value: 'member', label: 'Member' },
-    { value: 'silver', label: 'Silver' },
-    { value: 'gold', label: 'Gold' },
+    { value: 'member', label: '会员（5 次）' },
+    { value: 'silver', label: '银级（10 次）' },
+    { value: 'gold', label: '金级（20 次）' },
 ];
 
 // The label links to the Rewards benefits page so users can check which level
@@ -20,7 +20,8 @@ function AccountLevelSelect({ value, onChange }: AccountLevelSelectProps) {
                 ))}
             </select>
             <label htmlFor="accountLevel">
-                <a className="normal-link level-link" href="https://rewards.bing.com/about?section=benefits" target="_blank" rel="noopener noreferrer">account level</a>
+                账号等级
+                <a className="normal-link level-link" href="https://rewards.bing.com/about?section=benefits" target="_blank" rel="noopener noreferrer">查看 Microsoft Rewards 等级</a>
             </label>
         </span>
     );
