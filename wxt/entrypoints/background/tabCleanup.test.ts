@@ -137,6 +137,20 @@ describe('tabCleanup', () => {
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
   });
 
+  it('does not settle a legacy round without startedAt before its fallback deadline', async () => {
+    const startedFromId = Date.now();
+    await setStorageItems({
+      [RUN_KEY]: { id: startedFromId, phase: 'running', search: false, daily: true, claim: false } as unknown as TaskRunState,
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date(startedFromId + 1000));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('running');
+  });
+
   it('leaves a tracked tab alone while its deadline is in the future', async () => {
     await openTab(1);
     const [tabId] = await openTabIds();

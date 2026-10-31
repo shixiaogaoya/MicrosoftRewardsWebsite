@@ -78,7 +78,17 @@ async function settleDashboardIfGone(): Promise<void> {
     // died in the gap between starting the round and opening the page) is judged
     // on its own start time instead, so a round that just began is never
     // mistaken for an abandoned one.
-    const deadline = run.dashboardDeadline ?? run.startedAt + DASHBOARD_MAX_LIFETIME_MS;
+    const fallbackStart = Number.isFinite(run.startedAt)
+        ? run.startedAt
+        : Number.isFinite(run.id)
+            ? run.id
+            : null;
+    let deadline: number;
+    if (run.dashboardDeadline != null) deadline = run.dashboardDeadline;
+    else {
+        if (fallbackStart == null) return;
+        deadline = fallbackStart + DASHBOARD_MAX_LIFETIME_MS;
+    }
     if (deadline > Date.now()) return;
     if (run.dashboardTabId != null && (await tabIsStillOpen(run.dashboardTabId))) return;
 
