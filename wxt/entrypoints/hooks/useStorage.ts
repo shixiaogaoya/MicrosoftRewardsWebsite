@@ -11,19 +11,26 @@ export function useStorage<T>(key: string, defaultValue: T, storageType: Storage
     const storageKey = `${storageType}:${key}` as StorageItemKey;
     const [value, setValue] = useState<T>(defaultValue);
     const [isInitialized, setIsInitialized] = useState(false);
+    // The value the first read produced. A default that was only *read* is not
+    // a choice the user made, so it must not be written back: the background
+    // may still be deriving the real value (the auto-run migration runs after
+    // the popup can open), and echoing the default would overwrite it.
+    const [loadedValue, setLoadedValue] = useState<T | undefined>(undefined);
 
     useEffect(() => {
         storage.getItem(storageKey).then((stored: any) => {
-            setValue(stored ?? defaultValue);
+            const initial = (stored ?? defaultValue) as T;
+            setValue(initial);
+            setLoadedValue(initial);
             setIsInitialized(true);
         });
     }, [storageKey]);
 
     useEffect(() => {
-        if (isInitialized) {
+        if (isInitialized && loadedValue !== undefined && value !== loadedValue) {
             void storage.setItem(storageKey, value);
         }
-    }, [storageKey, value, isInitialized]);
+    }, [storageKey, value, loadedValue, isInitialized]);
 
     return [value, setValue] as const;
 }

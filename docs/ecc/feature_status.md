@@ -1,5 +1,7 @@
 # Feature Status
 
+> 历史背景：下表描述的是迁移前的 Chrome、Firefox 分目录和移动应用。现行扩展的中文界面、无推广布局、折叠高级设置、停止本轮、每日自动总开关和设置校验，见仓库根目录 [README.md](../../README.md)。
+
 Legend: ✅ implemented · 🟡 partial / unclear · ⛔ absent · 🔎 Needs Verification
 
 ## Browser extensions (Chrome + Firefox)

@@ -1,5 +1,7 @@
 # Tech Stack
 
+> 历史背景：浏览器扩展已迁移到 WXT，不再使用根目录 TypeScript 直接输出到 `chrome/prod` 与 `firefox/prod`。现行栈是 WXT + React + TypeScript + Vitest，源码只在 `wxt/`。构建、测试和本地加载见仓库根目录 [README.md](../../README.md)。
+
 ## Browser extensions
 
 | Concern | Chrome | Firefox |

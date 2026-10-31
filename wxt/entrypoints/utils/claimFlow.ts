@@ -1,4 +1,3 @@
-import { wait } from './helpers';
 import { findClaimButton, findCloseButton, isClaimable } from './claimCard';
 import { waitForMatch } from './waitForMatch';
 
@@ -6,22 +5,31 @@ import { waitForMatch } from './waitForMatch';
 // are bounded: "nothing to claim" is an ordinary day, not a failure.
 const CLAIM_CARD_TIMEOUT_MS = 15000;
 const CLAIM_DIALOG_TIMEOUT_MS = 10000;
-// Let the claim request land before dismissing the flyout that issued it.
-const CLAIM_SETTLE_MS = 2000;
+// After the confirm click we wait for a state we can see change. A fixed pause
+// is not evidence that the claim landed.
+const CLAIM_CONFIRM_TIMEOUT_MS = 8000;
 
 // Reported rather than logged, so the caller (and the tests) can tell a real
-// claim from the several ways there is simply nothing to do.
-export type ClaimOutcome = 'claimed' | 'nothingToClaim' | 'noCard' | 'noDialog';
+// claim from the several ways there is simply nothing to do — and from a click
+// that never produced a success state we can observe.
+export type ClaimOutcome = 'claimed' | 'nothingToClaim' | 'noCard' | 'noDialog' | 'unconfirmed' | 'signedOut' | 'cancelled';
 
 // The dashboard's "Ready to claim" card is only a trigger: it opens a flyout
 // whose own card carries the button that actually claims. So this is two clicks,
-// and the flyout is what reveals whether anything was pending at all.
-export async function claimPoints(root: ParentNode & Node = document): Promise<ClaimOutcome> {
+// and the flyout is what reveals whether anything was pending at all. `cancelled`
+// is checked before each click, so a stop that lands during either wait does not
+// press the next control.
+export async function claimPoints(
+    root: ParentNode & Node = document,
+    cancelled: () => Promise<boolean> = async () => false
+): Promise<ClaimOutcome> {
     const card = await waitForMatch(() => findClaimButton(root), CLAIM_CARD_TIMEOUT_MS, root);
-    if (!card) return 'noCard';
+    if (await cancelled()) return 'cancelled';
+    if (!card) return hasSignInLink(root) ? 'signedOut' : 'noCard';
     card.click();
 
     const claimButton = await waitForMatch(() => findClaimButtonInDialog(root), CLAIM_DIALOG_TIMEOUT_MS, root);
+    if (await cancelled()) return 'cancelled';
     if (!claimButton) return 'noDialog';
 
     if (!isClaimable(claimButton)) {
@@ -29,9 +37,37 @@ export async function claimPoints(root: ParentNode & Node = document): Promise<C
         return 'nothingToClaim';
     }
     claimButton.click();
-    await wait(CLAIM_SETTLE_MS);
+    const confirmed = await waitForMatch(
+        () => claimSettled(claimButton, root),
+        CLAIM_CONFIRM_TIMEOUT_MS,
+        root
+    );
+    if (!confirmed) return 'unconfirmed';
     dismissDialog(claimButton, root);
     return 'claimed';
+}
+
+// The only success signals this page currently exposes: the confirm control
+// becomes disabled, or the flyout that held it goes away. A button that stays
+// clickable is not a claim, however long we wait.
+// A signed-out dashboard shows a sign-in link instead of the claim card. The
+// content script only runs on rewards.bing.com, so the address bar never leaves
+// that host; the link is the signal we can actually see.
+export function hasSignInLink(root: ParentNode): boolean {
+    for (const anchor of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+        if (/login\.live\.com|login\.microsoftonline\.com/i.test(anchor.href)) return true;
+    }
+    return false;
+}
+
+// Only a state change on the control itself counts. The flyout going away is
+// NOT evidence: the user can close it with its own X, and the SPA re-renders the
+// grid for reasons unrelated to a claim, so a detached button means "we cannot
+// see it any more", not "the claim landed". Reporting that as `claimed` would
+// tell the user points arrived when nothing was confirmed.
+function claimSettled(claimButton: HTMLButtonElement, root: ParentNode & Node): true | null {
+    if (!root.contains(claimButton)) return null;
+    return isClaimable(claimButton) ? null : true;
 }
 
 // Scoped to the flyout on purpose: the dashboard card is still in the DOM behind

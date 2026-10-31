@@ -1,12 +1,13 @@
 import { browser } from 'wxt/browser';
 import { storage } from '#imports';
 import { getRndInteger } from '@/entrypoints/utils/helpers';
-import { buildSearchQuery, buildSearchUrl, nextDelayMs, shouldOpenMore, toInt } from '@/entrypoints/utils/search';
-import { getStorageItem, getStorageItems, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
+import { buildSearchQuery, buildSearchUrl, nextDelayMs, shouldOpenMore } from '@/entrypoints/utils/search';
+import { getStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
-import { DEFAULTS } from '@/entrypoints/utils/settings';
 import { clearBadge, setSearchCountBadge } from '@/entrypoints/utils/browserAction';
+import type { RunConfig } from '@/entrypoints/utils/runState';
 import { trackTab, untrackTab } from './tabCleanup';
+import { claimStep, currentRun, endRun, noteSearchDeadline, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
 
 const ALARM_NAME = 'openTabAlarm';
 // A search tab closes `closeTime` after it finishes loading, so the durable
@@ -18,41 +19,104 @@ const SEARCH_TAB_LOAD_ALLOWANCE_MS = 60000;
 // configured below it cannot be expressed as an alarm at all.
 const ALARM_MIN_DELAY_MS = 30000;
 
-// Opens tab #1 immediately (currentSearch = 1), then schedules the rest.
-export async function startSearches(searchTimeout: number, searches: number, closeTimeSeconds: number): Promise<void> {
-    await openSearchTab(closeTimeSeconds * 1000);
-    await recordProgress(1);
-    if (shouldOpenMore(1, searches)) {
-        scheduleNextStep(searchTimeout);
-    } else {
-        await stopSearches();
-    }
+// How long past its due time a search step may still be considered waiting.
+// The alarm is the durable trigger, and a suspended worker is woken for it; a
+// margin well past that separates a normal wake-up from an abandoned round.
+const SEARCH_STEP_WAKE_ALLOWANCE_MS = 120000;
+
+// The alarm is named for the round and the step it was armed for, not just the
+// feature. An alarm outlives the round that created it: after a stop and a fresh
+// start, the old one still fires, and a name alone would let it advance whatever
+// round happens to be current. Carrying both values lets a firing be attributed
+// to exactly one step of one round, and stale ones are dropped.
+function searchAlarmName(runId: number, step: number): string {
+    return `${ALARM_NAME}:${runId}:${step}`;
+}
+
+export function isSearchAlarm(name: string): boolean {
+    return name === ALARM_NAME || name.startsWith(`${ALARM_NAME}:`);
+}
+
+function parseSearchAlarm(name: string): { runId: number; step: number } | null {
+    const match = /^openTabAlarm:(\d+):(\d+)$/.exec(name);
+    if (!match) return null;
+    return { runId: Number(match[1]), step: Number(match[2]) };
+}
+
+// Opens tab #1 immediately, then schedules the rest. The count, the gap and the
+// close time are the ones frozen into this round, not whatever the settings say
+// now — editing them mid-run applies to the next round.
+export async function startSearches(runId: number, config: RunConfig): Promise<void> {
+    await runSearchStep(runId, 1, config);
 }
 
 export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
-    if (alarm.name !== ALARM_NAME) return;
-    const s = await getStorageItems(['searches', 'timeout', 'closeTime', 'currentSearch', 'active'], StorageValues.SYNC);
-    const searches = toInt(s.searches, DEFAULTS.searches);
-    const searchTimeout = toInt(s.timeout, DEFAULTS.timeout);
-    const closeTimeMs = toInt(s.closeTime, DEFAULTS.closeTime) * 1000;
-    const opened = toInt(s.currentSearch, searches);
-    const isSearchesEnabled = s.active ?? DEFAULTS.active;
-
-    // Alarms outlive the setting that created them (they survive a browser
-    // restart), so re-check the toggle every step: with "Daily searches" off,
-    // a leftover alarm must not keep opening Bing tabs.
-    if (!isSearchesEnabled || !shouldOpenMore(opened, searches)) {
-        await stopSearches();
+    if (!isSearchAlarm(alarm.name)) return;
+    const target = parseSearchAlarm(alarm.name);
+    // A bare alarm name carries no round, so there is no step it could safely
+    // advance: the round it belonged to cannot be identified. Ignoring it is
+    // right — the next step is armed by name once its own round runs.
+    if (!target) return;
+    const run = await currentRun();
+    // The alarm names the round and step it was armed for. A firing whose round
+    // has ended, or whose step is no longer the next one, is a leftover from a
+    // stopped or replaced run: it must not touch whatever round is current now.
+    if (!run || run.id !== target.runId || run.phase !== 'running' || !run.search) return;
+    const config = await readConfig();
+    if (!config) {
+        await finishSearch(run.id, { status: 'failed', reason: '本轮搜索配置丢失' });
         return;
     }
-    await openSearchTab(closeTimeMs);
-    const nowOpened = opened + 1;
-    await recordProgress(nowOpened);
-    if (shouldOpenMore(nowOpened, searches)) {
-        scheduleNextStep(searchTimeout);
-    } else {
-        await stopSearches();
+    const progress = await readProgress();
+    const opened = progress?.opened ?? 0;
+    // Only the step this alarm was armed for may run. Anything else is a stale
+    // firing (an old alarm, or one already consumed by the other trigger).
+    if (target.step !== opened + 1) return;
+    const searchesStillOn = await getStorageItem<boolean>('active', StorageValues.SYNC);
+
+    // Alarms outlive the setting that created them (they survive a browser
+    // restart), so re-check the toggle every step: with "执行搜索" off, a leftover
+    // alarm must not keep opening Bing tabs. The frozen count is what decides
+    // "are we done", not the live setting.
+    if (searchesStillOn === false || !shouldOpenMore(opened, config.searches)) {
+        await finishSearch(run.id, searchesStillOn === false
+            ? { status: 'cancelled', reason: '已关闭搜索' }
+            : { status: 'completed' });
+        return;
     }
+    await runSearchStep(run.id, target.step, config);
+}
+
+// Claims this step before doing anything it cannot undo. The in-worker timer and
+// the 30s backstop alarm both arrive here; whichever lands second sees the step
+// already taken and returns. A callback whose round was stopped or replaced fails
+// the same check, so it cannot open a tab or rewrite the new round's count.
+async function runSearchStep(runId: number, step: number, config: RunConfig): Promise<void> {
+    if (!(await claimStep(runId, step, 'search'))) return;
+    await openSearchTab(runId, config.closeTime * 1000);
+    // Stop can land while the tab is being created. The tab itself cannot be
+    // uncreated, but it is already registered for cleanup; this step must not
+    // put the round back into "running" or arm another one.
+    if (!(await stillRunning(runId))) {
+        clearBadge();
+        return;
+    }
+    // A failed write means the round ended between the check above and the
+    // queued write, so this step is no longer current: no further scheduling.
+    if (!(await recordProgress(runId, step, config.searches))) {
+        clearBadge();
+        return;
+    }
+    if (shouldOpenMore(step, config.searches)) {
+        scheduleNextStep(runId, step + 1, config.timeout);
+    } else {
+        await finishSearch(runId, { status: 'completed' });
+    }
+}
+
+async function stillRunning(runId: number): Promise<boolean> {
+    const run = await getStorageItem<TaskRunState>('taskRun', StorageValues.LOCAL);
+    return run?.id === runId && run.phase === 'running' && run.search;
 }
 
 // Waits out the gap before the next search, then runs the step.
@@ -66,40 +130,89 @@ export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
 //
 // Whichever path fires first re-schedules under the same alarm name, and
 // creating an alarm replaces the pending one, so a step never runs twice.
-function scheduleNextStep(searchTimeout: number): void {
+let shortStepTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleNextStep(runId: number, step: number, searchTimeout: number): void {
     const delayMs = nextDelayMs(searchTimeout);
-    browser.alarms.create(ALARM_NAME, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    const name = searchAlarmName(runId, step);
+    browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    // Search has no page the sweep can judge it by, even when the dashboard is
+    // still open. Recording when the next step is due lets a sweep after a
+    // worker restart tell "waiting" from "abandoned", instead of leaving the
+    // record to block every later start.
+    void noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
+    clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
-        setTimeout(() => void handleAlarmStep({ name: ALARM_NAME }), delayMs);
+        shortStepTimer = setTimeout(() => {
+            shortStepTimer = undefined;
+            void handleAlarmStep({ name });
+        }, delayMs);
+    }
+}
+
+function clearShortStepTimer(): void {
+    if (shortStepTimer !== undefined) {
+        clearTimeout(shortStepTimer);
+        shortStepTimer = undefined;
     }
 }
 
 export async function stopSearches(): Promise<void> {
-    await setStorageItem('isSearching', false, StorageValues.SYNC);
+    const progress = await readProgress();
+    if (progress?.isSearching) await writeProgress({ ...progress, isSearching: false });
     clearBadge();
-    // Only this run's alarm: clearAll() also wiped the tab-cleanup sweep, which
-    // left every tab the run had opened on screen for good.
-    await browser.alarms.clear(ALARM_NAME);
+    clearShortStepTimer();
+    // Only this feature's alarms: clearAll() also wiped the tab-cleanup sweep,
+    // which left every tab the run had opened on screen for good. Every search
+    // alarm is ours, including one left by a round that ended without clearing
+    // it, so all of them go.
+    const all = await browser.alarms.getAll();
+    await Promise.all(
+        all
+            .filter((alarm) => isSearchAlarm(alarm.name))
+            .map((alarm) => browser.alarms.clear(alarm.name))
+    );
 }
 
-// Turning "Daily searches" off has to stop a run that is already in flight —
-// waiting for the next alarm would leave the popup claiming to be searching.
-// Watching storage (rather than reacting to a popup message) also covers the
-// toggle being synced from another device.
+async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed'; reason?: string }): Promise<void> {
+    await recordResult(runId, 'search', result);
+    await stopSearches();
+    await endRun(runId, 'search');
+}
+
+// Turning "执行搜索" off stops the search half of a round that is already in
+// flight — waiting for the next alarm would leave the popup claiming searches
+// are still running. It does not stop the dashboard half: daily cards and claim
+// keep going. Watching storage also covers the toggle being synced from another
+// device.
 export function watchSearchesToggle(): void {
     storage.watch<boolean>('sync:active', (isEnabled) => {
-        if (isEnabled === false) void stopSearches();
+        if (isEnabled === false) void stopSearchOnly();
     });
 }
 
-// `currentSearch` is the number of search tabs opened in this run; the popup and
-// the toolbar badge both read it, so every step must persist it — including the
-// last one, or the popup would freeze one short of the total. `isSearching` is
-// re-affirmed here (not only at the start) so a run that outlives a service
-// worker restart still reports itself as running.
-async function recordProgress(opened: number): Promise<void> {
-    await setStorageItems({ currentSearch: opened, isSearching: true }, StorageValues.SYNC);
+async function stopSearchOnly(): Promise<void> {
+    const run = await currentRun();
+    await stopSearches();
+    if (!run?.search) return;
+    await recordResult(run.id, 'search', { status: 'cancelled', reason: '已关闭搜索' });
+    await endRun(run.id, 'search');
+}
+
+// `opened` is how many search tabs this round has started, not how many points
+// that earned. The popup and the toolbar badge both read it, so every step must
+// persist it — including the last one, or the popup would freeze one short of
+// the total. The total is the one frozen at the start of the round.
+//
+// The round check and the write are one queued operation: checking here and then
+// queueing the write would leave a gap a stop or a new round could slip into,
+// letting a stale step overwrite the new round's count. Returns false when this
+// step's round is gone, and the caller must then not schedule the next step.
+async function recordProgress(runId: number, opened: number, total: number): Promise<boolean> {
+    const written = await writeProgressIfRunning(runId, { opened, total, isSearching: true });
+    if (!written) return false;
     setSearchCountBadge(opened);
+    return true;
 }
 
 // The marAuto marker tells the bing-result content script this tab was opened
@@ -107,19 +220,22 @@ async function recordProgress(opened: number): Promise<void> {
 // when the user enabled "Open first result in search tabs"; manual Bing
 // searches (and tabs opened with the option off) lack the marker and are left
 // untouched.
-async function openSearchTab(closeTimeMs: number): Promise<void> {
+async function openSearchTab(runId: number, closeTimeMs: number): Promise<number | null> {
+    if (!(await stillRunning(runId))) return null;
     const openFirstResult = await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC);
     const query = buildSearchUrl(buildSearchQuery());
     const url = openFirstResult ? `${query}&marAuto=1` : query;
-    await openAndClose(url, closeTimeMs + getRndInteger(0, 1000));
+    return await openAndClose(runId, url, closeTimeMs + getRndInteger(0, 1000));
 }
 
-async function openAndClose(url: string, closeTimeMs: number): Promise<void> {
+async function openAndClose(runId: number, url: string, closeTimeMs: number): Promise<number | null> {
     const tab = await browser.tabs.create({ url, active: false });
     const tabId = tab.id!;
     // Backstop for the close below, whose timer and listener are both lost when
-    // the service worker is torn down.
+    // the service worker is torn down. A stop that landed while create() was in
+    // flight cannot undo the tab, so it still has to be registered for cleanup.
     await trackTab(tabId, closeTimeMs + SEARCH_TAB_LOAD_ALLOWANCE_MS);
+    if (!(await stillRunning(runId))) return null;
     function listener(updatedId: number, changeInfo: { status?: string }): void {
         if (updatedId === tabId && changeInfo.status === 'complete') {
             browser.tabs.onUpdated.removeListener(listener);
@@ -127,6 +243,7 @@ async function openAndClose(url: string, closeTimeMs: number): Promise<void> {
         }
     }
     browser.tabs.onUpdated.addListener(listener);
+    return tabId;
 }
 
 function waitAndClose(id: number, closeTimeMs: number): void {

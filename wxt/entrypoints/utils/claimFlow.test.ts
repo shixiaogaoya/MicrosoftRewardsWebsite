@@ -64,6 +64,21 @@ describe('claimPoints', () => {
 
         const outcome = await runToCompletion(claimPoints(root));
 
+        expect(outcome).toBe('unconfirmed');
+        expect(clicked).toEqual(['card', 'claim']);
+    });
+
+    // A click that is answered by a state we can see is the only 'claimed'.
+    it('reports claimed once the confirm button becomes disabled', async () => {
+        const root = dashboard({ dialog: () => dialogHtml() });
+        root.addEventListener('click', (event) => {
+            const button = (event.target as HTMLElement).closest('#claim');
+            if (button) button.setAttribute('data-disabled', 'true');
+        });
+        const clicked = recordClicks(root);
+
+        const outcome = await runToCompletion(claimPoints(root));
+
         expect(outcome).toBe('claimed');
         expect(clicked).toEqual(['card', 'claim', 'close']);
     });
@@ -92,6 +107,16 @@ describe('claimPoints', () => {
         expect(clicked).toEqual([]);
     });
 
+    it('reports a sign-in link as signed out rather than a missing card', async () => {
+        const root = document.createElement('div');
+        document.body.append(root);
+        root.innerHTML = '<a href="https://login.live.com/login.srf">Sign in</a>';
+
+        const outcome = await runToCompletion(claimPoints(root));
+
+        expect(outcome).toBe('signedOut');
+    });
+
     it('gives up rather than hanging when the flyout never opens', async () => {
         const root = dashboard();
         const clicked = recordClicks(root);
@@ -102,7 +127,10 @@ describe('claimPoints', () => {
         expect(clicked).toEqual(['card']);
     });
 
-    it('reports a claim even when the flyout closes itself, with nothing left to dismiss', async () => {
+    // Regression: the flyout going away used to be read as success. The user can
+    // dismiss it with its own X, and the SPA re-renders for unrelated reasons, so
+    // a detached button proves nothing about the claim.
+    it('does not report a claim just because the flyout closed itself', async () => {
         const root = dashboard({ dialog: () => dialogHtml() });
         root.addEventListener('click', (event) => {
             if ((event.target as HTMLElement).closest('#claim')) {
@@ -113,7 +141,7 @@ describe('claimPoints', () => {
 
         const outcome = await runToCompletion(claimPoints(root));
 
-        expect(outcome).toBe('claimed');
+        expect(outcome).toBe('unconfirmed');
         expect(clicked).toEqual(['card', 'claim']);
     });
 });

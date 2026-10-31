@@ -1,5 +1,7 @@
 # Architecture
 
+> 历史背景：下文保留的是 WXT 迁移前的三端设计记录。现行扩展只有 `wxt/`，Chrome MV3 与 Firefox MV2 由同一次构建产出。安装不再打开作者网站，也不登记卸载反馈地址。设置走同步存储，本轮进度和结果留在本机。现行行为见仓库根目录 [README.md](../../README.md)。
+
 Three independent clients, no shared code, no backend. Each is described below.
 
 ```
