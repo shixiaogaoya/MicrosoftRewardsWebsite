@@ -4,7 +4,7 @@ import { fakeBrowser } from 'wxt/testing';
 import { getStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { RESULTS_KEY, RUN_KEY, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
-import { beginRun, endRun, recordResult, requestStop, writeProgressIfRunning } from './taskRun';
+import { beginRun, endRun, recordResult, requestStop, settleUnresolved, writeProgressIfRunning } from './taskRun';
 import { PROGRESS_KEY, type RunProgress } from '@/entrypoints/utils/runState';
 
 describe('recordResult', () => {
@@ -30,6 +30,36 @@ describe('recordResult', () => {
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
     expect(results?.daily?.status).toBe('running');
     expect((await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL))?.id).toBe(second.id);
+  });
+});
+
+describe('settleUnresolved', () => {
+  beforeEach(() => fakeBrowser.reset());
+
+  // Regression: a missing result was treated as unresolved, so stopping a
+  // search-only round wrote `cancelled` for daily and claim. The popup then
+  // listed tasks that never ran and offered to retry them.
+  it('does not invent a result for a task this round never started', async () => {
+    const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    await settleUnresolved(run.id, ['search', 'daily', 'claim'], { status: 'cancelled', reason: '已停止' });
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.daily).toBeUndefined();
+    expect(results?.claim).toBeUndefined();
+  });
+
+  it('leaves a result that already settled', async () => {
+    const run = await beginRun(['search', 'daily'], { searches: 5, timeout: 60, closeTime: 5 });
+    await recordResult(run.id, 'daily', { status: 'completed' });
+
+    await settleUnresolved(run.id, ['search', 'daily', 'claim'], { status: 'cancelled', reason: '已停止' });
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results?.daily).toEqual({ status: 'completed' });
+    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.claim).toBeUndefined();
   });
 });
 

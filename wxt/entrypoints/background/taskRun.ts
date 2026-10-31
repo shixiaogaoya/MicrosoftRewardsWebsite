@@ -158,6 +158,9 @@ export function recordResult(runId: number, kind: TaskKind, result: TaskResult):
 }
 
 // Anything still `running` when its part of the round ends without a report.
+// A kind this round never started has no result and a false flag. Treating that
+// absence as unresolved would record it as cancelled, and the popup would list
+// the task and offer a retry for work that did not run.
 export function settleUnresolved(runId: number, kinds: TaskKind[], result: TaskResult): Promise<void> {
     return enqueue(async () => {
         const state = await read();
@@ -165,10 +168,11 @@ export function settleUnresolved(runId: number, kinds: TaskKind[], result: TaskR
         const results = (await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)) ?? {};
         let changed = false;
         for (const kind of kinds) {
-            if (!results[kind] || results[kind]?.status === 'running') {
-                results[kind] = result;
-                changed = true;
-            }
+            if (!state[kind]) continue;
+            const current = results[kind];
+            if (current && current.status !== 'running') continue;
+            results[kind] = result;
+            changed = true;
         }
         if (changed) await setStorageItem(RESULTS_KEY, results, StorageValues.LOCAL);
     });

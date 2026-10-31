@@ -9,6 +9,7 @@ import {
   handleStartup,
   runRewards,
   scheduleDailyCheckAlarm,
+  stopRewards,
 } from './dailySchedule';
 import { openDailyRewards } from './dailyRewards';
 import { beginRun, requestStop } from './taskRun';
@@ -546,6 +547,66 @@ describe('handleDailyCheckAlarm', () => {
 
     const settled = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
     expect(settled?.claim).toEqual({ status: 'unconfirmed', reason: '已点击，未出现完成状态' });
+  });
+
+  // Regression: stop settled every task kind, and a missing result counted as
+  // unresolved. A search-only stop therefore wrote `cancelled` for daily and
+  // claim, and the popup offered to retry tasks that had not run.
+  it('cancels only the tasks this round actually started', async () => {
+    const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    await stopRewards();
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.daily).toBeUndefined();
+    expect(results?.claim).toBeUndefined();
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect(run.id).toBeGreaterThan(0);
+  });
+
+  it('cancels an in-flight dashboard task without inventing the one that was off', async () => {
+    await beginRun(['search', 'daily'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    await stopRewards();
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.daily).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.claim).toBeUndefined();
+    const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+    expect(state?.daily).toBe(true);
+    expect(state?.search).toBe(false);
+  });
+
+  // Regression: the dashboard tab is untracked before its flags are cleared.
+  // With search still running and its own tabs already gone, that used to drop
+  // the sweep alarm, so a later worker death left the round blocking every start.
+  it('keeps the tab sweep armed when the dashboard finishes during a search', async () => {
+    vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({ id: 7 } as any);
+    vi.spyOn(fakeBrowser.tabs, 'get').mockResolvedValue({ id: 7 } as any);
+    vi.spyOn(fakeBrowser.tabs, 'remove').mockResolvedValue(undefined);
+    vi.spyOn(fakeBrowser.tabs, 'query').mockResolvedValue([]);
+    const messages = captureListeners(fakeBrowser.runtime.onMessage, 'addListener');
+    vi.spyOn(fakeBrowser.runtime.onMessage, 'removeListener').mockImplementation(() => {});
+    const run = await beginRun(['search', 'daily'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    const pending = openDailyRewards(run.id, { doDailySet: true, doClaim: false });
+    for (let i = 0; i < 20 && messages.length === 0; i++) await vi.advanceTimersByTimeAsync(0);
+    expect(messages.length).toBeGreaterThan(0);
+    messages.forEach((listener) => listener(
+      { action: 'dashboardDone', runId: run.id, daily: { status: 'completed' } },
+      { tab: { id: 7 } }
+    ));
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPendingWork();
+    await pending;
+
+    const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+    expect(state?.search).toBe(true);
+    expect(state?.daily).toBe(false);
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('completed');
+    expect(await fakeBrowser.alarms.get('closeStaleTabs')).toBeDefined();
   });
 
   it('records a stop as cancelled even when the dashboard then reports completed', async () => {

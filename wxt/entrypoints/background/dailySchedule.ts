@@ -9,7 +9,7 @@ import { MIGRATION_KEY, STATE_MIGRATION_VERSION, type RunConfig, type TaskKind, 
 import { openDailyRewards } from './dailyRewards';
 import { startSearches, stopSearches } from './searchRunner';
 import { clearTrackedTabs } from './tabCleanup';
-import { abandonRun, beginRun, endRun, noteAttempt, readAttempts, recordResult, requestStop, settleUnresolved } from './taskRun';
+import { abandonRun, beginRun, currentRun, endRun, noteAttempt, readAttempts, recordResult, requestStop, settleUnresolved } from './taskRun';
 import { migrateRunState } from './stateMigration';
 
 const DAILY_CHECK_ALARM = 'dailyCheck';
@@ -130,8 +130,13 @@ export async function stopRewards(): Promise<void> {
     const runId = await requestStop();
     await stopSearches();
     if (runId == null) return;
+    const run = await currentRun();
+    if (!run || run.id !== runId) return;
+    // Only the kinds this round started. settleUnresolved ignores the rest, and
+    // naming them here keeps a stop from being read as "cancel every task".
+    const started: TaskKind[] = (['search', 'daily', 'claim'] as const).filter((kind) => run[kind]);
     const cancelled: TaskResult = { status: 'cancelled', reason: '已停止' };
-    await settleUnresolved(runId, ['search', 'daily', 'claim'], cancelled);
+    await settleUnresolved(runId, started, cancelled);
     // Search has no page of its own left to close: stopSearches already dropped
     // the alarm and the short timer, and each search tab closes itself. The
     // dashboard record stays. finish() in the dashboard visit still holds this

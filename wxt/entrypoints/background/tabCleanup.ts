@@ -54,13 +54,17 @@ export function sweepStaleTabs(): Promise<void> {
         const remaining = Object.fromEntries(entries.filter(([, deadline]) => deadline > now));
 
         await Promise.all(due.map(([tabId]) => closeTab(Number(tabId))));
-        await saveRemaining(remaining);
+        // Settle before the registry write. saveRemaining decides whether to
+        // keep the sweep alarm, and it used to run while the dashboard flags
+        // were still set. With the search tabs already gone, that cleared the
+        // alarm while search was still running; a worker death after the step
+        // alarm had fired then left the record blocking every later start.
         // The in-worker lifetime timer is gone after a worker restart, so a
         // dashboard whose deadline has passed would otherwise stay `running`
-        // (or `stopping`) for good, and every later start would join a round
-        // that no longer exists. Closing the tab is not enough: the result has
-        // to be written and the record has to end.
+        // (or `stopping`) for good. Closing the tab is not enough: the result
+        // has to be written and the record has to end.
         await settleDashboardIfGone();
+        await saveRemaining(remaining);
     });
 }
 
@@ -78,10 +82,12 @@ async function settleDashboardIfGone(): Promise<void> {
     // A stopped round has no live page left to report, so whatever it still
     // held is over too.
     const stoppingSearch = stopping && run.search;
-    // A search-only round is judged on the deadline its next step was due by:
-    // its worker can die between opening a tab and arming that step, and nothing
-    // else would ever end the record. A round that died before recording that
-    // deadline falls back to its start time plus one full step allowance.
+    // A search round is judged on the deadline its next step was due by: its
+    // worker can die between opening a tab and arming that step, and nothing
+    // else would ever end the record. That includes a round that also ran the
+    // dashboard — those flags do not keep the search alive. A round that died
+    // before recording that deadline falls back to its start time plus one full
+    // step allowance.
     const searchDeadline = run.searchDeadline ?? roundStart(run) + SEARCH_ROUND_FALLBACK_MS;
     const abandonedSearch = run.search && !stopping && searchDeadline <= Date.now();
     if (dashboardKinds.length === 0 && !stoppingSearch && !abandonedSearch) return;
@@ -171,11 +177,14 @@ async function writeRegistry(tracked: TrackedTabs): Promise<void> {
     await setStorageItem(REGISTRY_KEY, tracked, StorageValues.LOCAL);
 }
 
-// Nothing tracked means nothing to sweep, so the alarm is dropped rather than
+// Nothing tracked means nothing to close, so the alarm is dropped rather than
 // waking the worker every minute for the rest of the session — unless a round
-// still holds work that only a sweep can settle: a search-only round judged by
-// its step deadline, or a stop whose cleanup was lost. Dropping the alarm then
-// would leave that record blocking every later start for good.
+// is still open. Tabs leave this registry as soon as they close, which is
+// before that record is cleared: dashboard finish untracks its tab first, and
+// a search spends the gap until its next step with no tab at all. The sweep is
+// what settles the record if the worker dies after a step alarm has fired and
+// before the next one is armed. Limiting that to a search-only or stopping
+// round dropped the alarm while a mixed round's search was still running.
 async function saveRemaining(tracked: TrackedTabs): Promise<void> {
     await writeRegistry(tracked);
     if (Object.keys(tracked).length === 0 && !(await runNeedsSweep())) {
@@ -187,11 +196,7 @@ async function saveRemaining(tracked: TrackedTabs): Promise<void> {
 
 async function runNeedsSweep(): Promise<boolean> {
     const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
-    if (!run) return false;
-    if (run.phase === 'stopping') return true;
-    // Only a search round is settled by the sweep without a tab to watch; a
-    // dashboard round keeps its own tab registered until its deadline.
-    return run.search && run.daily === false && run.claim === false;
+    return run != null;
 }
 
 function without(tracked: TrackedTabs, tabId: number): TrackedTabs {

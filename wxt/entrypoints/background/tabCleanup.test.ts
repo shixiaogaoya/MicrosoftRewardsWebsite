@@ -157,6 +157,93 @@ describe('tabCleanup', () => {
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
   });
 
+  // Regression: the sweep wrote the registry before settling the dashboard, and
+  // only a search-only round kept the alarm. Closing the dashboard tab while
+  // search was still between steps cleared the alarm, so a worker death after
+  // the step alarm had fired left the record blocking every later start.
+  it('keeps the sweep alarm when search continues after the dashboard tab is swept', async () => {
+    await openTab(1);
+    const [tabId] = await openTabIds();
+    await trackTab(tabId, 5000);
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 21,
+        phase: 'running',
+        search: true,
+        daily: true,
+        claim: false,
+        startedAt: Date.now(),
+        dashboardTabId: tabId,
+        dashboardDeadline: Date.now() + 5000,
+        searchDeadline: Date.now() + 30 * 60 * 1000,
+      },
+      [RESULTS_KEY]: { search: { status: 'running' }, daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+    expect(run?.search).toBe(true);
+    expect(run?.daily).toBe(false);
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('unconfirmed');
+    expect(await fakeBrowser.alarms.get(CLEANUP_ALARM)).toBeDefined();
+  });
+
+  // The same window, reached by the dashboard finish path: it untracks its tab
+  // while the daily flag is still set and the search tabs are already gone.
+  it('keeps the sweep alarm when the last tab is untracked during a mixed round', async () => {
+    await openTab(1);
+    const [tabId] = await openTabIds();
+    await trackTab(tabId, 5000);
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 22,
+        phase: 'running',
+        search: true,
+        daily: true,
+        claim: true,
+        startedAt: Date.now(),
+        searchDeadline: Date.now() + 60_000,
+      },
+      [RESULTS_KEY]: {
+        search: { status: 'running' },
+        daily: { status: 'running' },
+        claim: { status: 'running' },
+      },
+    }, StorageValues.LOCAL);
+
+    await untrackTab(tabId);
+
+    expect(await fakeBrowser.alarms.get(CLEANUP_ALARM)).toBeDefined();
+    expect((await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL))?.search).toBe(true);
+  });
+
+  it('drops the sweep alarm once settling the dashboard ends the round', async () => {
+    await openTab(1);
+    const [tabId] = await openTabIds();
+    await trackTab(tabId, 5000);
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 23,
+        phase: 'running',
+        search: false,
+        daily: true,
+        claim: false,
+        startedAt: Date.now(),
+        dashboardTabId: tabId,
+        dashboardDeadline: Date.now() + 5000,
+      },
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect(await fakeBrowser.alarms.get(CLEANUP_ALARM)).toBeUndefined();
+  });
+
   // A sweep that has nothing left to close must stay armed while a search round
   // still needs it, or the orphaned record could never be settled.
   it('keeps the sweep alarm while a search-only round is in flight', async () => {

@@ -136,9 +136,10 @@ function scheduleNextStep(runId: number, step: number, searchTimeout: number): v
     const delayMs = nextDelayMs(searchTimeout);
     const name = searchAlarmName(runId, step);
     browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
-    // A search-only round has no page the sweep can judge it by. Recording when
-    // the next step is due lets a sweep after a worker restart tell "waiting"
-    // from "abandoned", instead of leaving the record to block every later start.
+    // Search has no page the sweep can judge it by, even when the dashboard is
+    // still open. Recording when the next step is due lets a sweep after a
+    // worker restart tell "waiting" from "abandoned", instead of leaving the
+    // record to block every later start.
     void noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
     clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
