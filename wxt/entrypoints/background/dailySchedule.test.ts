@@ -83,6 +83,24 @@ describe('runRewards', () => {
     expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(true);
   });
 
+  // Regression: startSearches was awaited with no catch, so a failing tab open
+  // left the search result `running` and the run record blocking every later
+  // start. The dashboard half must survive it.
+  it('settles the search task as failed when starting searches throws', async () => {
+    vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+      if (String(info.url).startsWith('https://www.bing.com/search?q=')) throw new Error('tab creation failed');
+      return { id: 1 } as any;
+    });
+    await seed({ autoDaily: false });
+
+    await expect(runRewards()).resolves.toBeUndefined();
+    await flushPendingWork();
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results?.search?.status).toBe('failed');
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+  });
+
   it('opens no dashboard when "Daily set" is off, but still searches', async () => {
     const urls = trackCreatedTabs();
     await seed({ autoDaily: false });

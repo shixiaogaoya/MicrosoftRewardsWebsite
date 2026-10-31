@@ -96,7 +96,16 @@ export async function runRewards(options: RunOptions = {}): Promise<void> {
         }).catch((error: unknown) => failDashboard(run.id, pending, error));
     }
     if (pending.includes('search')) {
-        await startSearches(run.id, plan.config);
+        // The caller is fire-and-forget (an alarm, a startup or a message
+        // handler), so an unhandled rejection here would leave the search result
+        // `running` and the run record blocking every later start. The dashboard
+        // half is already independent, so only this task is settled.
+        try {
+            await startSearches(run.id, plan.config);
+        } catch (error) {
+            await recordResult(run.id, 'search', { status: 'failed', reason: reasonOf(error) });
+            await endRun(run.id, 'search');
+        }
     }
 }
 

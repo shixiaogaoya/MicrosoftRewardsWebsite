@@ -227,6 +227,18 @@ export function noteDashboardTab(runId: number, tabId: number, deadline: number)
     });
 }
 
+// The search half's equivalent: the instant after which a round that is still
+// waiting for its next step is abandoned rather than in flight. A gap plus the
+// platform's alarm floor is the normal wait; anything well past it means the
+// worker died before arming the next step, and nothing else would ever end it.
+export function noteSearchDeadline(runId: number, deadline: number): Promise<void> {
+    return enqueue(async () => {
+        const state = await read();
+        if (!state || state.id !== runId) return;
+        await write({ ...state, searchDeadline: deadline });
+    });
+}
+
 export async function readConfig(): Promise<RunConfig | null> {
     return await getStorageItem<RunConfig>(CONFIG_KEY, StorageValues.LOCAL);
 }

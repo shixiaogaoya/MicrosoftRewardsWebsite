@@ -35,6 +35,11 @@ export interface TaskRunState {
     // round once its own page is past the deadline.
     dashboardTabId?: number;
     dashboardDeadline?: number;
+    // When the next search step is due, plus a wake-up allowance. A search-only
+    // round has no page of its own to be judged by, so without this an in-flight
+    // round whose worker died between opening a tab and arming the next step
+    // would never be settled and would block every later start.
+    searchDeadline?: number;
 }
 
 // Frozen when the round starts. Editing the search count, the gap or the close

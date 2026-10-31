@@ -46,7 +46,10 @@ function NumberInput({ id, label, kind, value, hint, onChange }: NumberInputProp
                     const raw = e.target.value;
                     setDraft(raw);
                     const next = parseSettingInput(kind, raw);
-                    setInvalid(raw.trim() !== '' && next == null);
+                    // A blank box is a draft, not a valid setting: report it the
+                    // same way as a decimal or an out-of-range value instead of
+                    // staying silent until blur quietly restores the old number.
+                    setInvalid(next == null);
                     if (next != null && next !== value) onChange(next);
                 }}
                 onBlur={() => commit(draft)}

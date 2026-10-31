@@ -38,12 +38,21 @@ async function seedAutoRun(): Promise<void> {
 // today", not "it succeeded". When it really is today, record an attempt of
 // unknown result so the alarm does not immediately start another round.
 // It is never written as a completed result.
+//
+// Only the tasks the legacy round actually had enabled are marked. The old gate
+// started whatever the three toggles allowed, so a task that was off cannot have
+// run; claiming it did would make its first real run today silently skipped by
+// the automatic gate.
 async function migrateLastOpened(): Promise<void> {
     const existing = await getStorageItem<TaskAttempts>(ATTEMPTS_KEY, StorageValues.LOCAL);
     if (existing) return;
-    const s = await getStorageItems(['lastOpened'], StorageValues.SYNC);
+    const s = await getStorageItems(['lastOpened', 'active', 'autoDaily', 'claimPoints'], StorageValues.SYNC);
     if (!isLegacyToday(s.lastOpened)) return;
     const today = localDateId();
-    const attempts: TaskAttempts = { search: today, daily: today, claim: today };
+    const attempts: TaskAttempts = {};
+    if (s.active ?? DEFAULTS.active) attempts.search = today;
+    if (s.autoDaily ?? DEFAULTS.autoDaily) attempts.daily = today;
+    if (s.claimPoints ?? DEFAULTS.claimPoints) attempts.claim = today;
+    if (Object.keys(attempts).length === 0) return;
     await setStorageItems({ [ATTEMPTS_KEY]: attempts }, StorageValues.LOCAL);
 }

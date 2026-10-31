@@ -7,7 +7,7 @@ import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { clearBadge, setSearchCountBadge } from '@/entrypoints/utils/browserAction';
 import type { RunConfig } from '@/entrypoints/utils/runState';
 import { trackTab, untrackTab } from './tabCleanup';
-import { claimStep, currentRun, endRun, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
+import { claimStep, currentRun, endRun, noteSearchDeadline, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
 
 const ALARM_NAME = 'openTabAlarm';
 // A search tab closes `closeTime` after it finishes loading, so the durable
@@ -18,6 +18,11 @@ const SEARCH_TAB_LOAD_ALLOWANCE_MS = 60000;
 // Chrome silently clamps any alarm shorter than this to 30s, so a gap the user
 // configured below it cannot be expressed as an alarm at all.
 const ALARM_MIN_DELAY_MS = 30000;
+
+// How long past its due time a search step may still be considered waiting.
+// The alarm is the durable trigger, and a suspended worker is woken for it; a
+// margin well past that separates a normal wake-up from an abandoned round.
+const SEARCH_STEP_WAKE_ALLOWANCE_MS = 120000;
 
 // The alarm is named for the round and the step it was armed for, not just the
 // feature. An alarm outlives the round that created it: after a stop and a fresh
@@ -131,6 +136,10 @@ function scheduleNextStep(runId: number, step: number, searchTimeout: number): v
     const delayMs = nextDelayMs(searchTimeout);
     const name = searchAlarmName(runId, step);
     browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    // A search-only round has no page the sweep can judge it by. Recording when
+    // the next step is due lets a sweep after a worker restart tell "waiting"
+    // from "abandoned", instead of leaving the record to block every later start.
+    void noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
     clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
         shortStepTimer = setTimeout(() => {

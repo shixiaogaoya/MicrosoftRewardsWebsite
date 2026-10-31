@@ -124,6 +124,54 @@ describe('tabCleanup', () => {
     expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.search?.status).toBe('cancelled');
   });
 
+  // Regression: a search-only round whose worker died between opening a tab and
+  // arming the next step left a `running` record that blocked every later start.
+  it('settles a search-only round whose next step never came', async () => {
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 17, phase: 'running', search: true, daily: false, claim: false,
+        startedAt: Date.now(), searchDeadline: Date.now() - 1000,
+      },
+      [RESULTS_KEY]: { search: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:05:00Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.search?.status).toBe('unconfirmed');
+  });
+
+  // The step is still due, so the round is waiting rather than abandoned.
+  it('keeps a search round whose next step is still due', async () => {
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 18, phase: 'running', search: true, daily: false, claim: false,
+        startedAt: Date.now(), searchDeadline: Date.now() + 60000,
+      },
+      [RESULTS_KEY]: { search: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
+  });
+
+  // A sweep that has nothing left to close must stay armed while a search round
+  // still needs it, or the orphaned record could never be settled.
+  it('keeps the sweep alarm while a search-only round is in flight', async () => {
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 19, phase: 'running', search: true, daily: false, claim: false,
+        startedAt: Date.now(), searchDeadline: Date.now() + 60000,
+      },
+    }, StorageValues.LOCAL);
+
+    await sweepStaleTabs();
+
+    expect(await fakeBrowser.alarms.get(CLEANUP_ALARM)).toBeDefined();
+  });
+
   // A round whose dashboard tab was never recorded is judged on its own start
   // time, so a round that just began is never mistaken for an abandoned one.
   it('does not settle a round that started a moment ago', async () => {

@@ -14,6 +14,12 @@ const CLEANUP_ALARM = 'closeStaleTabs';
 // therefore closes within about a minute of its deadline instead of never.
 const SWEEP_PERIOD_MINUTES = 1;
 
+// How long a search round may go without recording a next-step deadline before
+// a sweep treats it as abandoned. Generous on purpose: the longest legitimate
+// wait is one gap plus the platform's alarm floor, and this must not cut a slow
+// but healthy round short.
+const SEARCH_ROUND_FALLBACK_MS = 30 * 60 * 1000;
+
 export function isCleanupAlarm(name: string): boolean {
     return name === CLEANUP_ALARM;
 }
@@ -67,50 +73,63 @@ export function sweepStaleTabs(): Promise<void> {
 async function settleDashboardIfGone(): Promise<void> {
     const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
     if (!run) return;
-    const dashboardKinds = (['daily', 'claim'] as const).filter((kind) => run[kind]);
     const stopping = run.phase === 'stopping';
-    // A stopping round whose worker died before it could finish also holds its
-    // search half. Left alone it blocks every later start forever, which is the
-    // same stuck state as an abandoned dashboard visit.
-    const stoppingSearch = stopping && run.search;
-    if (dashboardKinds.length === 0 && !stoppingSearch) return;
-    // A round that never recorded its tab (the create() failed, or the worker
-    // died in the gap between starting the round and opening the page) is judged
-    // on its own start time instead, so a round that just began is never
-    // mistaken for an abandoned one.
-    const fallbackStart = Number.isFinite(run.startedAt)
-        ? run.startedAt
-        : Number.isFinite(run.id)
-            ? run.id
-            : null;
-    let deadline: number;
-    if (run.dashboardDeadline != null) deadline = run.dashboardDeadline;
-    else {
-        if (fallbackStart == null) return;
-        deadline = fallbackStart + DASHBOARD_MAX_LIFETIME_MS;
-    }
-    if (deadline > Date.now()) return;
-    if (run.dashboardTabId != null && (await tabIsStillOpen(run.dashboardTabId))) return;
-
-    const result = stopping
-        ? { status: 'cancelled' as const, reason: '已停止' }
-        : { status: 'unconfirmed' as const, reason: '页面未在时限内返回结果' };
-    for (const kind of dashboardKinds) {
-        await recordResult(run.id, kind, result);
-        await endRun(run.id, kind);
-    }
+    const dashboardKinds = (['daily', 'claim'] as const).filter((kind) => run[kind]);
     // A stopped round has no live page left to report, so whatever it still
     // held is over too.
+    const stoppingSearch = stopping && run.search;
+    // A search-only round is judged on the deadline its next step was due by:
+    // its worker can die between opening a tab and arming that step, and nothing
+    // else would ever end the record. A round that died before recording that
+    // deadline falls back to its start time plus one full step allowance.
+    const searchDeadline = run.searchDeadline ?? roundStart(run) + SEARCH_ROUND_FALLBACK_MS;
+    const abandonedSearch = run.search && !stopping && searchDeadline <= Date.now();
+    if (dashboardKinds.length === 0 && !stoppingSearch && !abandonedSearch) return;
+
+    // The dashboard half still owns its page: if its own tab is alive and its
+    // deadline has not passed, only the search half may be settled here.
+    const dashboardDone =
+        dashboardKinds.length === 0 ||
+        (dashboardDeadlinePassed(run) && !(await tabIsStillOpen(run)));
+
+    const cancelled = { status: 'cancelled' as const, reason: '已停止' };
+    if (dashboardDone) {
+        const result = stopping ? cancelled : { status: 'unconfirmed' as const, reason: '页面未在时限内返回结果' };
+        for (const kind of dashboardKinds) {
+            await recordResult(run.id, kind, result);
+            await endRun(run.id, kind);
+        }
+    }
     if (stoppingSearch) {
-        await recordResult(run.id, 'search', result);
+        await recordResult(run.id, 'search', cancelled);
+        await endRun(run.id, 'search');
+    } else if (abandonedSearch) {
+        await recordResult(run.id, 'search', { status: 'unconfirmed', reason: '后台中断，未能确认本轮搜索' });
         await endRun(run.id, 'search');
     }
 }
 
-// A missing tab is reported two ways depending on the browser: real Chrome
-// rejects the promise, and the test double resolves with undefined. Both mean
-// the page is gone, so both count as "not open".
-async function tabIsStillOpen(tabId: number): Promise<boolean> {
+// A round that never recorded its tab (the create() failed, or the worker died
+// in the gap between starting the round and opening the page) is judged on its
+// own start time instead, so a round that just began is never mistaken for an
+// abandoned one.
+function dashboardDeadlinePassed(run: TaskRunState): boolean {
+    const deadline = run.dashboardDeadline ?? roundStart(run) + DASHBOARD_MAX_LIFETIME_MS;
+    return deadline <= Date.now();
+}
+
+// `startedAt` was added after the first release of this state model, so a record
+// written by an older build has none. Its id is a millisecond timestamp, which is
+// the same moment — using it keeps such a record from being settled instantly on
+// a NaN comparison. A record with neither is left alone rather than guessed at.
+function roundStart(run: TaskRunState): number {
+    if (Number.isFinite(run.startedAt)) return run.startedAt;
+    if (Number.isFinite(run.id)) return run.id;
+    return Number.POSITIVE_INFINITY;
+}
+
+async function tabIsStillOpen(run: TaskRunState, tabId = run.dashboardTabId): Promise<boolean> {
+    if (tabId == null) return false;
     try {
         const tab = await browser.tabs.get(tabId);
         return tab != null;
@@ -153,10 +172,26 @@ async function writeRegistry(tracked: TrackedTabs): Promise<void> {
 }
 
 // Nothing tracked means nothing to sweep, so the alarm is dropped rather than
-// waking the worker every minute for the rest of the session.
+// waking the worker every minute for the rest of the session — unless a round
+// still holds work that only a sweep can settle: a search-only round judged by
+// its step deadline, or a stop whose cleanup was lost. Dropping the alarm then
+// would leave that record blocking every later start for good.
 async function saveRemaining(tracked: TrackedTabs): Promise<void> {
     await writeRegistry(tracked);
-    if (Object.keys(tracked).length === 0) await browser.alarms.clear(CLEANUP_ALARM);
+    if (Object.keys(tracked).length === 0 && !(await runNeedsSweep())) {
+        await browser.alarms.clear(CLEANUP_ALARM);
+        return;
+    }
+    await ensureSweepAlarm();
+}
+
+async function runNeedsSweep(): Promise<boolean> {
+    const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+    if (!run) return false;
+    if (run.phase === 'stopping') return true;
+    // Only a search round is settled by the sweep without a tab to watch; a
+    // dashboard round keeps its own tab registered until its deadline.
+    return run.search && run.daily === false && run.claim === false;
 }
 
 function without(tracked: TrackedTabs, tabId: number): TrackedTabs {
