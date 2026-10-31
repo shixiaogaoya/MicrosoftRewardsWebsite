@@ -60,8 +60,13 @@ export function hasSignInLink(root: ParentNode): boolean {
     return false;
 }
 
+// Only a state change on the control itself counts. The flyout going away is
+// NOT evidence: the user can close it with its own X, and the SPA re-renders the
+// grid for reasons unrelated to a claim, so a detached button means "we cannot
+// see it any more", not "the claim landed". Reporting that as `claimed` would
+// tell the user points arrived when nothing was confirmed.
 function claimSettled(claimButton: HTMLButtonElement, root: ParentNode & Node): true | null {
-    if (!root.contains(claimButton)) return true;
+    if (!root.contains(claimButton)) return null;
     return isClaimable(claimButton) ? null : true;
 }
 

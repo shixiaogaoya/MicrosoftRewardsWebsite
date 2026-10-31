@@ -50,7 +50,7 @@ describe('tabCleanup', () => {
     const [tabId] = await openTabIds();
     await trackTab(tabId, 5000);
     await setStorageItems({
-      [RUN_KEY]: { id: 9, phase: 'running', search: false, daily: true, claim: false },
+      [RUN_KEY]: { id: 9, phase: 'running', search: false, daily: true, claim: false, startedAt: Date.now(), dashboardTabId: tabId, dashboardDeadline: Date.now() + 5000 },
       [RESULTS_KEY]: { daily: { status: 'running' } },
     }, StorageValues.LOCAL);
 
@@ -59,6 +59,82 @@ describe('tabCleanup', () => {
 
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('unconfirmed');
+  });
+
+  // Regression: the sweep skipped `stopping`, so a stop whose in-worker cleanup
+  // was lost left the record forever and every later start joined a dead round.
+  it('settles a stopping round instead of leaving it hanging', async () => {
+    await trackTab(4242, 1000);
+    await setStorageItems({
+      [RUN_KEY]: { id: 12, phase: 'stopping', search: true, daily: true, claim: false, startedAt: Date.now(), dashboardTabId: 4242, dashboardDeadline: Date.now() + 1000 },
+      [RESULTS_KEY]: { search: { status: 'cancelled' }, daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('cancelled');
+  });
+
+  // Regression: the old check looked for any open Rewards page, so a dashboard
+  // the user had open themselves kept the round from ever settling.
+  it("ignores a Rewards page the user opened themselves", async () => {
+    await fakeBrowser.tabs.create({ url: 'https://rewards.bing.com/' });
+    await setStorageItems({
+      [RUN_KEY]: { id: 13, phase: 'running', search: false, daily: true, claim: false, startedAt: Date.now(), dashboardTabId: 9999, dashboardDeadline: Date.now() - 1000 },
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('unconfirmed');
+  });
+
+  // The round's own page is still open, so there is nothing to settle yet.
+  it("keeps the round while its own dashboard page is still open", async () => {
+    await fakeBrowser.tabs.create({ url: 'https://rewards.bing.com/dashboard' });
+    const [tabId] = await openTabIds();
+    await setStorageItems({
+      [RUN_KEY]: { id: 14, phase: 'running', search: false, daily: true, claim: false, startedAt: Date.now(), dashboardTabId: tabId, dashboardDeadline: Date.now() - 1000 },
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:01:40Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('running');
+  });
+
+  // Regression: a stopping round that only had searches held no dashboard
+  // record, so it was skipped entirely and blocked every later start.
+  it('settles a stopping round that only had searches', async () => {
+    await setStorageItems({
+      [RUN_KEY]: { id: 16, phase: 'stopping', search: true, daily: false, claim: false, startedAt: Date.now() },
+      [RESULTS_KEY]: { search: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    vi.setSystemTime(new Date('2026-08-21T10:05:00Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.search?.status).toBe('cancelled');
+  });
+
+  // A round whose dashboard tab was never recorded is judged on its own start
+  // time, so a round that just began is never mistaken for an abandoned one.
+  it('does not settle a round that started a moment ago', async () => {
+    await setStorageItems({
+      [RUN_KEY]: { id: 15, phase: 'running', search: false, daily: true, claim: false, startedAt: Date.now() },
+      [RESULTS_KEY]: { daily: { status: 'running' } },
+    }, StorageValues.LOCAL);
+
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
   });
 
   it('leaves a tracked tab alone while its deadline is in the future', async () => {

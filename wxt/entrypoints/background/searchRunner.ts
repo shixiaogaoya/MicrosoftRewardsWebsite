@@ -7,7 +7,7 @@ import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { clearBadge, setSearchCountBadge } from '@/entrypoints/utils/browserAction';
 import type { RunConfig } from '@/entrypoints/utils/runState';
 import { trackTab, untrackTab } from './tabCleanup';
-import { claimStep, currentRun, endRun, readConfig, readProgress, recordResult, writeProgress, type TaskRunState } from './taskRun';
+import { claimStep, currentRun, endRun, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
 
 const ALARM_NAME = 'openTabAlarm';
 // A search tab closes `closeTime` after it finishes loading, so the durable
@@ -19,6 +19,25 @@ const SEARCH_TAB_LOAD_ALLOWANCE_MS = 60000;
 // configured below it cannot be expressed as an alarm at all.
 const ALARM_MIN_DELAY_MS = 30000;
 
+// The alarm is named for the round and the step it was armed for, not just the
+// feature. An alarm outlives the round that created it: after a stop and a fresh
+// start, the old one still fires, and a name alone would let it advance whatever
+// round happens to be current. Carrying both values lets a firing be attributed
+// to exactly one step of one round, and stale ones are dropped.
+function searchAlarmName(runId: number, step: number): string {
+    return `${ALARM_NAME}:${runId}:${step}`;
+}
+
+export function isSearchAlarm(name: string): boolean {
+    return name === ALARM_NAME || name.startsWith(`${ALARM_NAME}:`);
+}
+
+function parseSearchAlarm(name: string): { runId: number; step: number } | null {
+    const match = /^openTabAlarm:(\d+):(\d+)$/.exec(name);
+    if (!match) return null;
+    return { runId: Number(match[1]), step: Number(match[2]) };
+}
+
 // Opens tab #1 immediately, then schedules the rest. The count, the gap and the
 // close time are the ones frozen into this round, not whatever the settings say
 // now — editing them mid-run applies to the next round.
@@ -27,9 +46,17 @@ export async function startSearches(runId: number, config: RunConfig): Promise<v
 }
 
 export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
-    if (alarm.name !== ALARM_NAME) return;
-    const run = await getStorageItem<TaskRunState>('taskRun', StorageValues.LOCAL);
-    if (!run || run.phase !== 'running' || !run.search) return;
+    if (!isSearchAlarm(alarm.name)) return;
+    const target = parseSearchAlarm(alarm.name);
+    // A bare alarm name carries no round, so there is no step it could safely
+    // advance: the round it belonged to cannot be identified. Ignoring it is
+    // right — the next step is armed by name once its own round runs.
+    if (!target) return;
+    const run = await currentRun();
+    // The alarm names the round and step it was armed for. A firing whose round
+    // has ended, or whose step is no longer the next one, is a leftover from a
+    // stopped or replaced run: it must not touch whatever round is current now.
+    if (!run || run.id !== target.runId || run.phase !== 'running' || !run.search) return;
     const config = await readConfig();
     if (!config) {
         await finishSearch(run.id, { status: 'failed', reason: '本轮搜索配置丢失' });
@@ -37,6 +64,9 @@ export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
     }
     const progress = await readProgress();
     const opened = progress?.opened ?? 0;
+    // Only the step this alarm was armed for may run. Anything else is a stale
+    // firing (an old alarm, or one already consumed by the other trigger).
+    if (target.step !== opened + 1) return;
     const searchesStillOn = await getStorageItem<boolean>('active', StorageValues.SYNC);
 
     // Alarms outlive the setting that created them (they survive a browser
@@ -49,7 +79,7 @@ export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
             : { status: 'completed' });
         return;
     }
-    await runSearchStep(run.id, opened + 1, config);
+    await runSearchStep(run.id, target.step, config);
 }
 
 // Claims this step before doing anything it cannot undo. The in-worker timer and
@@ -66,9 +96,14 @@ async function runSearchStep(runId: number, step: number, config: RunConfig): Pr
         clearBadge();
         return;
     }
-    await recordProgress(runId, step, config.searches);
+    // A failed write means the round ended between the check above and the
+    // queued write, so this step is no longer current: no further scheduling.
+    if (!(await recordProgress(runId, step, config.searches))) {
+        clearBadge();
+        return;
+    }
     if (shouldOpenMore(step, config.searches)) {
-        scheduleNextStep(config.timeout);
+        scheduleNextStep(runId, step + 1, config.timeout);
     } else {
         await finishSearch(runId, { status: 'completed' });
     }
@@ -92,14 +127,15 @@ async function stillRunning(runId: number): Promise<boolean> {
 // creating an alarm replaces the pending one, so a step never runs twice.
 let shortStepTimer: ReturnType<typeof setTimeout> | undefined;
 
-function scheduleNextStep(searchTimeout: number): void {
+function scheduleNextStep(runId: number, step: number, searchTimeout: number): void {
     const delayMs = nextDelayMs(searchTimeout);
-    browser.alarms.create(ALARM_NAME, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    const name = searchAlarmName(runId, step);
+    browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
     clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
         shortStepTimer = setTimeout(() => {
             shortStepTimer = undefined;
-            void handleAlarmStep({ name: ALARM_NAME });
+            void handleAlarmStep({ name });
         }, delayMs);
     }
 }
@@ -116,9 +152,16 @@ export async function stopSearches(): Promise<void> {
     if (progress?.isSearching) await writeProgress({ ...progress, isSearching: false });
     clearBadge();
     clearShortStepTimer();
-    // Only this run's alarm: clearAll() also wiped the tab-cleanup sweep, which
-    // left every tab the run had opened on screen for good.
-    await browser.alarms.clear(ALARM_NAME);
+    // Only this feature's alarms: clearAll() also wiped the tab-cleanup sweep,
+    // which left every tab the run had opened on screen for good. Every search
+    // alarm is ours, including one left by a round that ended without clearing
+    // it, so all of them go.
+    const all = await browser.alarms.getAll();
+    await Promise.all(
+        all
+            .filter((alarm) => isSearchAlarm(alarm.name))
+            .map((alarm) => browser.alarms.clear(alarm.name))
+    );
 }
 
 async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed'; reason?: string }): Promise<void> {
@@ -150,10 +193,16 @@ async function stopSearchOnly(): Promise<void> {
 // that earned. The popup and the toolbar badge both read it, so every step must
 // persist it — including the last one, or the popup would freeze one short of
 // the total. The total is the one frozen at the start of the round.
-async function recordProgress(runId: number, opened: number, total: number): Promise<void> {
-    if (!(await stillRunning(runId))) return;
-    await writeProgress({ opened, total, isSearching: true });
+//
+// The round check and the write are one queued operation: checking here and then
+// queueing the write would leave a gap a stop or a new round could slip into,
+// letting a stale step overwrite the new round's count. Returns false when this
+// step's round is gone, and the caller must then not schedule the next step.
+async function recordProgress(runId: number, opened: number, total: number): Promise<boolean> {
+    const written = await writeProgressIfRunning(runId, { opened, total, isSearching: true });
+    if (!written) return false;
     setSearchCountBadge(opened);
+    return true;
 }
 
 // The marAuto marker tells the bing-result content script this tab was opened

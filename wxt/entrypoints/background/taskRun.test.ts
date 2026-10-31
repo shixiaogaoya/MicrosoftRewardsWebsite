@@ -4,7 +4,8 @@ import { fakeBrowser } from 'wxt/testing';
 import { getStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { RESULTS_KEY, RUN_KEY, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
-import { beginRun, endRun, recordResult } from './taskRun';
+import { beginRun, endRun, recordResult, requestStop, writeProgressIfRunning } from './taskRun';
+import { PROGRESS_KEY, type RunProgress } from '@/entrypoints/utils/runState';
 
 describe('recordResult', () => {
   beforeEach(() => fakeBrowser.reset());
@@ -29,5 +30,43 @@ describe('recordResult', () => {
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
     expect(results?.daily?.status).toBe('running');
     expect((await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL))?.id).toBe(second.id);
+  });
+});
+
+describe('writeProgressIfRunning', () => {
+  beforeEach(() => fakeBrowser.reset());
+
+  // Regression: the round was checked and the write queued separately, so a stop
+  // or a new round could land in the gap and the stale step then overwrote the
+  // new round's count.
+  it('refuses to write once the round has been replaced', async () => {
+    const first = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+    await requestStop();
+    await endRun(first.id, 'search');
+    const second = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+    await writeProgressIfRunning(second.id, { opened: 1, total: 5, isSearching: true });
+
+    const written = await writeProgressIfRunning(first.id, { opened: 4, total: 5, isSearching: true });
+
+    expect(written).toBe(false);
+    expect(await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL)).toMatchObject({ opened: 1 });
+  });
+
+  it('refuses to write for a round that has been stopped', async () => {
+    const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+    await requestStop();
+
+    const written = await writeProgressIfRunning(run.id, { opened: 3, total: 5, isSearching: true });
+
+    expect(written).toBe(false);
+  });
+
+  it('writes for the live round', async () => {
+    const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    const written = await writeProgressIfRunning(run.id, { opened: 2, total: 5, isSearching: true });
+
+    expect(written).toBe(true);
+    expect(await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL)).toMatchObject({ opened: 2 });
   });
 });

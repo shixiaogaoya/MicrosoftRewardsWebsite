@@ -13,7 +13,9 @@ import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
 import SearchProgressBar from '@/entrypoints/components/SearchProgressBar';
 import TaskResultsList from '@/entrypoints/components/TaskResults';
 
-const HELP_URL = 'https://github.com/spin311/MicrosoftRewardsWebsite#readme';
+// The fork's own Chinese README, not the upstream one: the behaviour documented
+// there (stopping a round, the auto-run switch, 已发起 versus 到账) is this fork's.
+const HELP_URL = 'https://github.com/shixiaogaoya/MicrosoftRewardsWebsite#readme';
 const REWARDS_URL = 'https://rewards.bing.com/';
 
 const QUIET: ReadonlySet<TaskStatus> = new Set(['completed', 'not-needed']);

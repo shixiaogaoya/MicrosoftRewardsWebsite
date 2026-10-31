@@ -1,12 +1,10 @@
 import { browser } from 'wxt/browser';
 import { getRndInteger } from '@/entrypoints/utils/helpers';
 import { trackTab, untrackTab } from './tabCleanup';
-import { currentRun, endRun, isRunStopping, recordResult, settleUnresolved } from './taskRun';
+import { currentRun, endRun, isRunStopping, noteDashboardTab, recordResult, settleUnresolved } from './taskRun';
 import type { TaskKind, TaskResult, TaskStatus } from '@/entrypoints/utils/runState';
+import { DASHBOARD_MAX_LIFETIME_MS } from '@/entrypoints/utils/runState';
 
-// Safety cap: close the dashboard tab even if the content script never reports
-// done (page failed to render the daily sets, message dropped, etc.).
-const DAILY_TAB_MAX_LIFETIME_MS = 90000;
 // A daily-set search tab is closed a random few seconds after it finishes
 // loading (so the search registers before we close it).
 const DAILY_LINK_MIN_LINGER_MS = 2000;
@@ -44,14 +42,17 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
     // A stop that arrived while the tab was being created cannot undo it. The tab
     // is still registered, and finish() — which stays armed — closes it.
     if (await isRunStopping(runId)) {
-        await trackTab(dashboardId, DAILY_TAB_MAX_LIFETIME_MS);
+        await trackTab(dashboardId, DASHBOARD_MAX_LIFETIME_MS);
         await closeOwnedTab(runId, dashboardId);
         await closeOut(runId, startedKinds(jobs), undefined);
         return;
     }
     // The `finish` timer below is the precise close; this is the backstop for
-    // when the service worker is torn down before it ever fires.
-    await trackTab(dashboardId, DAILY_TAB_MAX_LIFETIME_MS);
+    // when the service worker is torn down before it ever fires. The record also
+    // carries the tab id and deadline, so a sweep after a restart can settle this
+    // round from its own page instead of guessing from any open Rewards tab.
+    await trackTab(dashboardId, DASHBOARD_MAX_LIFETIME_MS);
+    await noteDashboardTab(runId, dashboardId, Date.now() + DASHBOARD_MAX_LIFETIME_MS);
 
     function onCreated(created: { id?: number; openerTabId?: number }): void {
         if (created.openerTabId !== dashboardId || created.id == null) return;
@@ -115,7 +116,7 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
     // If the worker was asleep and this listener is gone, the tracked-tab sweep
     // still closes the page. This timer is the in-worker copy of that deadline:
     // a visit that never reports is recorded as unconfirmed, not left running.
-    lifetimeTimer = setTimeout(finish, DAILY_TAB_MAX_LIFETIME_MS);
+    lifetimeTimer = setTimeout(finish, DASHBOARD_MAX_LIFETIME_MS);
 
     // Not awaited. The close listener and the lifetime timer above are already
     // armed, so a tab closed while this wait is pending still ends the round.

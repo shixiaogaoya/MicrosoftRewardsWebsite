@@ -103,6 +103,7 @@ export function beginRun(kinds: TaskKind[], config: RunConfig): Promise<{ id: nu
             search: kinds.includes('search'),
             daily: kinds.includes('daily'),
             claim: kinds.includes('claim'),
+            startedAt: Date.now(),
         });
         await setStorageItems({
             [STEP_KEY]: 0,
@@ -197,6 +198,32 @@ export async function readProgress(): Promise<RunProgress | null> {
 export function writeProgress(progress: RunProgress): Promise<void> {
     return enqueue(async () => {
         await setStorageItem(PROGRESS_KEY, progress, StorageValues.LOCAL);
+    });
+}
+
+// The check and the write have to be one queued operation. Checking for the
+// round and then queueing the write separately leaves a gap: a stop or a new
+// round can land in it, and the stale step then overwrites the new round's
+// count. Returns false when this step no longer belongs to a live round, so the
+// caller knows not to schedule the next one.
+export function writeProgressIfRunning(runId: number, progress: RunProgress): Promise<boolean> {
+    return enqueue(async () => {
+        const state = await read();
+        if (!state || state.id !== runId || state.phase !== 'running' || !state.search) return false;
+        await setStorageItem(PROGRESS_KEY, progress, StorageValues.LOCAL);
+        return true;
+    });
+}
+
+// Remembers which tab this round's dashboard opened, and when it must be gone.
+// The durable sweep needs both to settle the round after a worker restart: it
+// must not mistake a Rewards page the user opened themselves for ours, and it
+// must not conclude anything before this round's own deadline.
+export function noteDashboardTab(runId: number, tabId: number, deadline: number): Promise<void> {
+    return enqueue(async () => {
+        const state = await read();
+        if (!state || state.id !== runId) return;
+        await write({ ...state, dashboardTabId: tabId, dashboardDeadline: deadline });
     });
 }
 

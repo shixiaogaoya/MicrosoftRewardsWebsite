@@ -127,7 +127,10 @@ describe('claimPoints', () => {
         expect(clicked).toEqual(['card']);
     });
 
-    it('reports a claim even when the flyout closes itself, with nothing left to dismiss', async () => {
+    // Regression: the flyout going away used to be read as success. The user can
+    // dismiss it with its own X, and the SPA re-renders for unrelated reasons, so
+    // a detached button proves nothing about the claim.
+    it('does not report a claim just because the flyout closed itself', async () => {
         const root = dashboard({ dialog: () => dialogHtml() });
         root.addEventListener('click', (event) => {
             if ((event.target as HTMLElement).closest('#claim')) {
@@ -138,7 +141,7 @@ describe('claimPoints', () => {
 
         const outcome = await runToCompletion(claimPoints(root));
 
-        expect(outcome).toBe('claimed');
+        expect(outcome).toBe('unconfirmed');
         expect(clicked).toEqual(['card', 'claim']);
     });
 });

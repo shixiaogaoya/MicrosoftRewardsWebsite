@@ -25,6 +25,16 @@ export interface TaskRunState {
     search: boolean;
     daily: boolean;
     claim: boolean;
+    // When the round started. The fallback deadline for a round whose dashboard
+    // tab was never recorded (the create failed, or the worker died in the gap),
+    // so a sweep cannot mistake a just-started round for an abandoned one.
+    startedAt: number;
+    // This round's own dashboard tab and the instant it must be gone. Recorded
+    // when the tab is created so the durable sweep can tell this round's page
+    // apart from a Rewards page the user has open themselves, and can settle the
+    // round once its own page is past the deadline.
+    dashboardTabId?: number;
+    dashboardDeadline?: number;
 }
 
 // Frozen when the round starts. Editing the search count, the gap or the close
@@ -44,11 +54,17 @@ export interface RunProgress {
 
 export const EMPTY_PROGRESS: RunProgress = { opened: 0, total: 0, isSearching: false };
 
-export interface TaskAttempts {
+export type TaskAttempts = {
     search?: string;
     daily?: string;
     claim?: string;
-}
+};
+
+// Safety cap: close the dashboard tab even if the content script never reports
+// done (page failed to render the daily sets, message dropped, etc.). Also the
+// hard bound on how long a round may stay unresolved: the durable sweep uses it
+// to settle a round whose in-worker timers were lost with the service worker.
+export const DASHBOARD_MAX_LIFETIME_MS = 90000;
 
 export type TaskResults = Partial<Record<TaskKind, TaskResult>>;
 

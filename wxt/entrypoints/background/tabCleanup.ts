@@ -1,7 +1,7 @@
 import { browser } from 'wxt/browser';
 import { getStorageItem, setStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
-import { RUN_KEY, type TaskRunState } from '@/entrypoints/utils/runState';
+import { DASHBOARD_MAX_LIFETIME_MS, RUN_KEY, type TaskRunState } from '@/entrypoints/utils/runState';
 import { endRun, recordResult } from './taskRun';
 
 // Tab ids the extension opened, each mapped to the wall-clock time by which it
@@ -50,22 +50,62 @@ export function sweepStaleTabs(): Promise<void> {
         await Promise.all(due.map(([tabId]) => closeTab(Number(tabId))));
         await saveRemaining(remaining);
         // The in-worker lifetime timer is gone after a worker restart, so a
-        // dashboard whose deadline has passed would otherwise stay `running`.
-        // Closing the tab is not enough: the result has to be written too.
-        if (due.length > 0) await settleDashboardIfGone();
+        // dashboard whose deadline has passed would otherwise stay `running`
+        // (or `stopping`) for good, and every later start would join a round
+        // that no longer exists. Closing the tab is not enough: the result has
+        // to be written and the record has to end.
+        await settleDashboardIfGone();
     });
 }
 
+// Settles a round whose own dashboard page is past its deadline.
+//
+// It has to be this round's tab, not "any Rewards page": the user may have the
+// dashboard open themselves, and counting that as ours would leave the round
+// hanging. It also has to run for a `stopping` round — a stop whose in-worker
+// cleanup was lost is exactly the state that would otherwise never end.
 async function settleDashboardIfGone(): Promise<void> {
     const run = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
-    if (!run || run.phase === 'stopping') return;
-    const kinds = (['daily', 'claim'] as const).filter((kind) => run[kind]);
-    if (kinds.length === 0) return;
-    const open = await browser.tabs.query({ url: 'https://rewards.bing.com/*' });
-    if (open.length > 0) return;
-    for (const kind of kinds) {
-        await recordResult(run.id, kind, { status: 'unconfirmed', reason: '页面未在时限内返回结果' });
+    if (!run) return;
+    const dashboardKinds = (['daily', 'claim'] as const).filter((kind) => run[kind]);
+    const stopping = run.phase === 'stopping';
+    // A stopping round whose worker died before it could finish also holds its
+    // search half. Left alone it blocks every later start forever, which is the
+    // same stuck state as an abandoned dashboard visit.
+    const stoppingSearch = stopping && run.search;
+    if (dashboardKinds.length === 0 && !stoppingSearch) return;
+    // A round that never recorded its tab (the create() failed, or the worker
+    // died in the gap between starting the round and opening the page) is judged
+    // on its own start time instead, so a round that just began is never
+    // mistaken for an abandoned one.
+    const deadline = run.dashboardDeadline ?? run.startedAt + DASHBOARD_MAX_LIFETIME_MS;
+    if (deadline > Date.now()) return;
+    if (run.dashboardTabId != null && (await tabIsStillOpen(run.dashboardTabId))) return;
+
+    const result = stopping
+        ? { status: 'cancelled' as const, reason: '已停止' }
+        : { status: 'unconfirmed' as const, reason: '页面未在时限内返回结果' };
+    for (const kind of dashboardKinds) {
+        await recordResult(run.id, kind, result);
         await endRun(run.id, kind);
+    }
+    // A stopped round has no live page left to report, so whatever it still
+    // held is over too.
+    if (stoppingSearch) {
+        await recordResult(run.id, 'search', result);
+        await endRun(run.id, 'search');
+    }
+}
+
+// A missing tab is reported two ways depending on the browser: real Chrome
+// rejects the promise, and the test double resolves with undefined. Both mean
+// the page is gone, so both count as "not open".
+async function tabIsStillOpen(tabId: number): Promise<boolean> {
+    try {
+        const tab = await browser.tabs.get(tabId);
+        return tab != null;
+    } catch {
+        return false;
     }
 }
 
