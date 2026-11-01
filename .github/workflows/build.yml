@@ -1,0 +1,42 @@
+name: 在线构建扩展
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - browser: chrome
+            script: zip
+          - browser: firefox
+            script: zip:firefox
+
+    defaults:
+      run:
+        working-directory: wxt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: npm ci
+      - run: npm run compile
+      - run: npm run test
+      - run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: extension-${{ matrix.browser }}
+          path: wxt/dist/*.zip
+          if-no-files-found: error
