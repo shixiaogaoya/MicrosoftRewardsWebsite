@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.ref }}
 
       - name: 下载本次构建的扩展 ZIP
         run: gh run download "$GITHUB_RUN_ID" --pattern 'extension-*' --dir artifacts
