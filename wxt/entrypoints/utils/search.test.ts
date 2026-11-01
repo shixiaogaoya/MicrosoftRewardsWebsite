@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { toInt, buildSearchQuery, buildSearchUrl, nextDelayMs, jitterSpreadMs, shouldOpenMore } from './search';
 import { SEARCH_LEAD_INS, SEARCH_TOPICS, SEARCH_TAILS } from '../data/searchTerms';
 
@@ -140,9 +140,20 @@ describe('nextDelayMs', () => {
   });
 
   it('keeps the configured timeout as the average', () => {
-    for (const timeout of [5, 120]) {
-      const mean = Array.from({ length: 20000 }, () => nextDelayMs(timeout)).reduce((a, b) => a + b, 0) / 20000;
-      expect(mean / 1000).toBeCloseTo(timeout, 0);
+    const random = vi.spyOn(Math, 'random');
+    // Symmetric inputs give an exact mean without random sampling failures.
+    const quantiles = [0, 0.25, 0.5, 0.75, 1 - Number.EPSILON];
+    try {
+      for (const timeout of [5, 120]) {
+        const delays = quantiles.map((quantile) => {
+          random.mockReturnValue(quantile);
+          return nextDelayMs(timeout);
+        });
+        const mean = delays.reduce((a, b) => a + b, 0) / delays.length;
+        expect(mean).toBe(timeout * 1000);
+      }
+    } finally {
+      random.mockRestore();
     }
   });
 });
