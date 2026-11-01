@@ -54,6 +54,10 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 下载本次构建的扩展 ZIP
         run: gh run download "$GITHUB_RUN_ID" --pattern 'extension-*' --dir artifacts
 
