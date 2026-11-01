@@ -41,7 +41,9 @@
 
 ## 安装
 
-本 fork 尚未发布 Release，当前请从源码构建。上游商店版本不包含本 fork 的全部改动。
+从 [Releases](https://github.com/shixiaogaoya/MicrosoftRewardsWebsite/releases) 下载本 fork 的扩展 ZIP：Chrome / Edge 选择文件名含 `chrome` 的版本，Firefox 选择含 `firefox` 的版本。解压后按下方步骤加载扩展。预发布版仍需浏览器实测，使用前请查看发布说明和[已知问题](#已知问题与验证范围)。
+
+上游商店版本不包含本 fork 的全部改动，也可以按下面的方法从源码构建。
 
 ### 从源码构建
 
@@ -168,6 +170,8 @@ npm ci
 | Firefox ZIP 打包 | `npm run zip:firefox` |
 
 构建输出位于 `wxt/dist/`，不加入 Git 跟踪。发布时应从确定的提交生成标签和对应产物，在发布说明中区分模拟验证与浏览器实测。创建 GitHub Release 不等于已发布到浏览器商店。
+
+GitHub Actions 支持在线构建：更新 `master` 或手动运行「在线构建扩展」后，可在运行记录的 Artifacts 下载 ZIP。推送以 `v` 开头的版本标签时，会在两个浏览器的检查、测试和打包均通过后自动创建 Release 并上传 ZIP；标签说明用作发布说明，名称含 `-` 的标签（如 `v3.1.2-beta.1`）会标记为预发布版。
 
 ## 反馈与许可
 

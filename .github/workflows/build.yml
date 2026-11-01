@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -40,3 +41,30 @@ jobs:
           name: extension-${{ matrix.browser }}
           path: wxt/dist/*.zip
           if-no-files-found: error
+
+  release:
+    name: 发布到 Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: 下载本次构建的扩展 ZIP
+        run: gh run download "$GITHUB_RUN_ID" --pattern 'extension-*' --dir artifacts
+
+      - name: 创建版本并上传扩展 ZIP
+        shell: bash
+        run: |
+          release_args=(--verify-tag --title "Rewards 助手 $GITHUB_REF_NAME" --notes-from-tag)
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_args+=(--prerelease --latest=false)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            artifacts/extension-chrome/*-chrome.zip \
+            artifacts/extension-firefox/*-firefox.zip \
+            "${release_args[@]}"
