@@ -18,46 +18,99 @@ const STATUS_TEXT: Record<TaskStatus, string> = {
 
 const ORDER: TaskKind[] = ['search', 'daily', 'claim'];
 
+type Tone = 'done' | 'attention' | 'busy' | 'idle';
+
+const TONE: Record<TaskStatus, Tone> = {
+    running: 'busy',
+    completed: 'done',
+    'not-needed': 'done',
+    failed: 'attention',
+    unconfirmed: 'attention',
+    cancelled: 'attention',
+};
+
 interface TaskResultsProps {
     results: TaskResults;
     isRunning: boolean;
-    // The main list is one line per task. Reason text and the retry control
-    // stay in the expanded detail, so the main screen keeps a single button.
-    detailed?: boolean;
 }
 
-// One line per task that this round actually ran. A task that was not selected
-// is absent, so it is not shown as "not needed".
-function TaskResultsList({ results, isRunning, detailed = false }: TaskResultsProps) {
-    const rows = ORDER.filter((kind) => results[kind] && (!detailed || needsDetail(results[kind])));
+// One row per task that this round actually ran. A task that was not selected
+// is absent, so it is not shown as "not needed". The reason and the retry
+// control sit inline: a collapsed duplicate of the same list added a click
+// without adding information.
+function TaskResultsList({ results, isRunning }: TaskResultsProps) {
+    const rows = ORDER.filter((kind) => results[kind]);
     if (rows.length === 0) return null;
 
     return (
         <ul className="task-results">
             {rows.map((kind) => (
-                <TaskRow key={kind} kind={kind} result={results[kind]!} isRunning={isRunning} detailed={detailed} />
+                <TaskRow key={kind} kind={kind} result={results[kind]!} isRunning={isRunning} />
             ))}
         </ul>
     );
 }
 
-function needsDetail(result: TaskResult | undefined): boolean {
-    return result != null && result.status !== 'completed' && result.status !== 'not-needed' && result.status !== 'running';
+function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResult; isRunning: boolean }) {
+    const canRetry = !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
+    const tone = TONE[result.status];
+    return (
+        <li className="task-item">
+            <div className="task-rail" aria-hidden="true">
+                <span className={`task-dot task-dot--${tone}`}>
+                    <DotIcon tone={tone} />
+                </span>
+                <span className="task-line" />
+            </div>
+            <div className="task-body">
+                <div className="task-row">
+                    <span className="task-name">{LABELS[kind]}</span>
+                    <span className="task-actions">
+                        <span className={`task-status task-status--${tone}`}>{STATUS_TEXT[result.status]}</span>
+                        {canRetry && (
+                            <button type="button" className="task-retry" onClick={() => retry(kind)} aria-label={`重试${LABELS[kind]}`}>
+                                <RetryIcon />
+                            </button>
+                        )}
+                    </span>
+                </div>
+                {result.reason && <p className="task-reason">{result.reason}</p>}
+            </div>
+        </li>
+    );
 }
 
-function TaskRow({ kind, result, isRunning, detailed }: { kind: TaskKind; result: TaskResult; isRunning: boolean; detailed: boolean }) {
-    const canRetry = detailed && !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
+function DotIcon({ tone }: { tone: Tone }) {
+    if (tone === 'done') {
+        return (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12.5l4.5 4.5L19 7.5" />
+            </svg>
+        );
+    }
+    if (tone === 'attention') {
+        return (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                <path d="M12 6.5v7M12 17.5h.01" />
+            </svg>
+        );
+    }
+    if (tone === 'busy') {
+        return (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                <path d="M12 3a9 9 0 0 1 9 9" />
+            </svg>
+        );
+    }
+    return <span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '999px', background: '#94a3b0' }} />;
+}
+
+function RetryIcon() {
     return (
-        <li className={`task-result task-result--${result.status}`}>
-            <span className="task-result-name">{LABELS[kind]}</span>
-            <span className="task-result-status">{STATUS_TEXT[result.status]}</span>
-            {detailed && result.reason && <span className="task-result-reason">{result.reason}</span>}
-            {canRetry && (
-                <button type="button" className="task-retry" onClick={() => retry(kind)}>
-                    重试此任务
-                </button>
-            )}
-        </li>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+            <path d="M20 4.5V11h-6.5" />
+        </svg>
     );
 }
 

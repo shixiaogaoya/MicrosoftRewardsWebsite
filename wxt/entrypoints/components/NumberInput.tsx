@@ -7,13 +7,14 @@ interface NumberInputProps {
     kind: NumericSetting;
     value: number;
     hint: string;
+    unit: string;
     onChange: (value: number) => void;
 }
 
 // The box may be emptied while the user is typing. That draft is not a setting:
 // only a whole number inside the range is written, and an invalid draft is
 // replaced by the last saved value when the field loses focus.
-function NumberInput({ id, label, kind, value, hint, onChange }: NumberInputProps) {
+function NumberInput({ id, label, kind, value, hint, unit, onChange }: NumberInputProps) {
     const [draft, setDraft] = useState(String(value));
     const [invalid, setInvalid] = useState(false);
 
@@ -36,25 +37,28 @@ function NumberInput({ id, label, kind, value, hint, onChange }: NumberInputProp
     return (
         <div className="field">
             <label htmlFor={id}>{label}</label>
-            <input
-                type="text"
-                inputMode="numeric"
-                id={id}
-                aria-invalid={invalid}
-                aria-describedby={invalid ? `${id}-hint` : undefined}
-                value={draft}
-                onChange={(e) => {
-                    const raw = e.target.value;
-                    setDraft(raw);
-                    const next = parseSettingInput(kind, raw);
-                    // A blank box is a draft, not a valid setting: report it the
-                    // same way as a decimal or an out-of-range value instead of
-                    // staying silent until blur quietly restores the old number.
-                    setInvalid(next == null);
-                    if (next != null && next !== value) onChange(next);
-                }}
-                onBlur={() => commit(draft)}
-            />
+            <div className={`input-shell${invalid ? ' input-shell--invalid' : ''}`}>
+                <input
+                    type="text"
+                    inputMode="numeric"
+                    id={id}
+                    aria-invalid={invalid}
+                    aria-describedby={invalid ? `${id}-hint` : undefined}
+                    value={draft}
+                    onChange={(e) => {
+                        const raw = e.target.value;
+                        setDraft(raw);
+                        const next = parseSettingInput(kind, raw);
+                        // A blank box is a draft, not a valid setting: report it the
+                        // same way as a decimal or an out-of-range value instead of
+                        // staying silent until blur quietly restores the old number.
+                        setInvalid(next == null);
+                        if (next != null && next !== value) onChange(next);
+                    }}
+                    onBlur={() => commit(draft)}
+                />
+                <span className="input-unit" aria-hidden="true">{unit}</span>
+            </div>
             {invalid && <span id={`${id}-hint`} className="field-hint" role="status">{hint}</span>}
         </div>
     );

@@ -20,6 +20,12 @@ const REWARDS_URL = 'https://rewards.bing.com/';
 
 const QUIET: ReadonlySet<TaskStatus> = new Set(['completed', 'not-needed']);
 
+const LEVEL_LABELS: Record<string, string> = {
+    member: '会员 · 5 次',
+    silver: '银级 · 10 次',
+    gold: '金级 · 20 次',
+};
+
 function needsAttention(result: TaskResult | undefined): boolean {
     return result != null && !QUIET.has(result.status);
 }
@@ -35,7 +41,9 @@ function App() {
     const [claimPoints, setClaimPoints] = useStorage<boolean>('claimPoints', DEFAULTS.claimPoints, StorageValues.SYNC);
     const [autoRunEnabled, setAutoRunEnabled] = useStorage<boolean>('autoRunEnabled', DEFAULTS.autoRunEnabled, StorageValues.SYNC);
     const [stopRequested, setStopRequested] = useState(false);
-    const [detailsOpen, setDetailsOpen] = useState(false);
+    // The settings live on their own view: the popup is one document, so this is
+    // a view switch rather than a route.
+    const [showSettings, setShowSettings] = useState(false);
     const { isLoaded, isSearching, completed, total, isRunning, phase, results } = useSearchProgress();
 
     const searches = clampSetting('searches', searchesStored);
@@ -54,7 +62,7 @@ function App() {
         if (!isRunning) setStopRequested(false);
     }, [isRunning]);
 
-    // Nothing has run yet: a 0/N bar would read as stalled, so it stays hidden.
+    // Nothing has run yet: a 0/N ring would read as stalled, so it stays hidden.
     const hasSearchToShow = isLoaded && (isSearching || completed > 0);
     const hasResults = isLoaded && (results.search || results.daily || results.claim);
     const hasAttention = needsAttention(results.search) || needsAttention(results.daily) || needsAttention(results.claim);
@@ -79,9 +87,9 @@ function App() {
                         ? '已停止'
                         : '准备就绪';
 
-    // The dot next to the status text carries the state at a glance: a run in
+    // The pill next to the status text carries the state at a glance: a run in
     // flight, one that needs the user's eyes, and a plain idle state must not
-    // all look the same in a line of small text.
+    // all look the same.
     const statusTone = !isLoaded
         ? 'idle'
         : isStopping || isRunning
@@ -89,6 +97,8 @@ function App() {
             : hasAttention
                 ? 'attention'
                 : 'idle';
+
+    const attentionCount = [results.search, results.daily, results.claim].filter(needsAttention).length;
 
     // Picking a level sets a sensible search count; the number field stays
     // editable so the user can still override it. Opening the popup never does
@@ -98,18 +108,125 @@ function App() {
         setSearches(LEVEL_SEARCHES[level] ?? DEFAULTS.searches);
     }
 
+    if (showSettings) {
+        return (
+            <main className="popup">
+                <header className="settings-header">
+                    <button type="button" className="back-button" onClick={() => setShowSettings(false)} aria-label="返回">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M15 6l-6 6 6 6" />
+                        </svg>
+                    </button>
+                    <h1 className="settings-heading">设置</h1>
+                </header>
+
+                <section className="card">
+                    <div className="switch-row">
+                        <label className="switch-label" htmlFor="autoRunEnabled">每日自动执行</label>
+                        <input
+                            className="switch"
+                            type="checkbox"
+                            role="switch"
+                            id="autoRunEnabled"
+                            checked={autoRunEnabled}
+                            onChange={(e) => setAutoRunEnabled(e.target.checked)}
+                        />
+                    </div>
+                </section>
+
+                <div className="group">
+                    <h2 className="group-title">执行内容</h2>
+                    <section className="card">
+                        <div className="tile-grid">
+                            <TaskTile id="autoCheckbox" label="执行搜索" checked={active} onChange={setActive} />
+                            <TaskTile id="autoDaily" label="完成每日活动" checked={autoDaily} onChange={setAutoDaily} />
+                            <TaskTile id="claimPoints" label="领取积分" checked={claimPoints} onChange={setClaimPoints} />
+                            <TaskTile id="openFirstResult" label="打开首个结果" checked={openFirstResult} onChange={setOpenFirstResult} />
+                        </div>
+                    </section>
+                </div>
+
+                <div className="group">
+                    <h2 className="group-title">搜索参数</h2>
+                    <section className="card">
+                        <AccountLevelSelect value={accountLevel} onChange={handleLevelChange} />
+                        <div className="divider" />
+                        <div className="param-grid">
+                            <NumberInput
+                                id="searches"
+                                kind="searches"
+                                label="搜索次数"
+                                unit="次"
+                                hint={`${SETTING_LIMITS.searches.min}～${SETTING_LIMITS.searches.max} 的整数`}
+                                value={searches}
+                                onChange={setSearches}
+                            />
+                            <NumberInput
+                                id="timeout"
+                                kind="timeout"
+                                label="搜索间隔"
+                                unit="秒"
+                                hint={`${SETTING_LIMITS.timeout.min}～${SETTING_LIMITS.timeout.max} 的整数`}
+                                value={timeout}
+                                onChange={setTimeoutValue}
+                            />
+                            <NumberInput
+                                id="closeTime"
+                                kind="closeTime"
+                                label="关闭标签页"
+                                unit="秒"
+                                hint={`${SETTING_LIMITS.closeTime.min}～${SETTING_LIMITS.closeTime.max} 的整数，0 表示加载后即关闭`}
+                                value={closeTime}
+                                onChange={setCloseTime}
+                            />
+                        </div>
+                        {isTimeoutRisky && (
+                            <p className="field-warning" role="status">
+                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时，Microsoft 常常不计积分，浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
+                            </p>
+                        )}
+                    </section>
+                </div>
+
+                <a className="ghost-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" id="settingsHelpLink">
+                    使用说明
+                    <ExternalIcon />
+                </a>
+            </main>
+        );
+    }
+
     return (
         <main className="popup">
             <header className="header">
-                <h1 className="heading">Rewards 助手</h1>
+                <div className="brand">
+                    <span className="brand-mark" aria-hidden="true">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" />
+                        </svg>
+                    </span>
+                    <h1 className="heading">Rewards 助手</h1>
+                </div>
+                <a className="help-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" aria-label="帮助" id="helpLink">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M9.6 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.7" />
+                        <path d="M12 17h.01" />
+                    </svg>
+                </a>
             </header>
 
             <section className="card card--status" aria-labelledby="status-heading">
                 <h2 id="status-heading" className="visually-hidden">运行状态</h2>
-                <p className={`status-line status-line--${statusTone}`} role="status">
-                    <span className="status-dot" aria-hidden="true" />
-                    {statusText}
-                </p>
+                <div className="status-head">
+                    <span className={`status-pill status-pill--${statusTone}`} role="status">
+                        <span className="status-dot" aria-hidden="true" />
+                        {statusText}
+                    </span>
+                    <span className="level-note">{LEVEL_LABELS[accountLevel] ?? LEVEL_LABELS.member}</span>
+                </div>
+
+                {hasSearchToShow && <SearchProgressBar completed={completed} total={total} />}
 
                 <ManualClaimButton
                     isRunning={isRunning}
@@ -119,93 +236,96 @@ function App() {
                     onStop={() => setStopRequested(true)}
                 />
                 {!hasTaskSelected && !isRunning && (
-                    <p className="field-warning" role="status">请在高级设置中选择至少一项任务</p>
-                )}
-                {hasSearchToShow && (
-                    <SearchProgressBar completed={completed} total={total} />
+                    <p className="field-warning" role="status">请在设置中选择至少一项任务</p>
                 )}
             </section>
 
             {hasResults && (
-                <section className="card card--results" aria-labelledby="results-heading">
-                    <h2 id="results-heading" className="card-title">任务结果</h2>
+                <section className="card" aria-labelledby="results-heading">
+                    <div className="card-head">
+                        <h2 id="results-heading" className="card-title">任务进度</h2>
+                        {attentionCount > 0 && <span className="card-head-note">{attentionCount} 项待确认</span>}
+                    </div>
                     <TaskResultsList results={results} isRunning={isRunning} />
-                    {hasAttention && (
-                        <details className="details" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)}>
-                            <summary>查看详情与重试</summary>
-                            <TaskResultsList results={results} isRunning={isRunning} detailed />
-                        </details>
-                    )}
                 </section>
             )}
 
-            <section className="card card--settings">
-                <div className="input-with-info">
-                    <input className="form-check-input" type="checkbox" id="autoRunEnabled" checked={autoRunEnabled} onChange={(e) => setAutoRunEnabled(e.target.checked)} />
-                    <label htmlFor="autoRunEnabled">每日自动执行</label>
+            <section className="card">
+                <div className="switch-row">
+                    <label className="switch-label" htmlFor="autoRunEnabled">每日自动执行</label>
+                    <input
+                        className="switch"
+                        type="checkbox"
+                        role="switch"
+                        id="autoRunEnabled"
+                        checked={autoRunEnabled}
+                        onChange={(e) => setAutoRunEnabled(e.target.checked)}
+                    />
                 </div>
-
-                <details className="advanced">
-                    <summary>高级设置</summary>
-                    <div className="checkboxes checkboxes--grid">
-                        <div className="input-with-info">
-                            <input className="form-check-input" type="checkbox" id="autoCheckbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                            <label htmlFor="autoCheckbox">执行搜索</label>
-                        </div>
-                        <div className="input-with-info">
-                            <input className="form-check-input" type="checkbox" id="autoDaily" checked={autoDaily} onChange={(e) => setAutoDaily(e.target.checked)} />
-                            <label htmlFor="autoDaily">完成每日活动</label>
-                        </div>
-                        <div className="input-with-info">
-                            <input className="form-check-input" type="checkbox" id="claimPoints" checked={claimPoints} onChange={(e) => setClaimPoints(e.target.checked)} />
-                            <label htmlFor="claimPoints">领取积分</label>
-                        </div>
-                        <div className="input-with-info">
-                            <input className="form-check-input" type="checkbox" id="openFirstResult" checked={openFirstResult} onChange={(e) => setOpenFirstResult(e.target.checked)} />
-                            <label htmlFor="openFirstResult">打开首个结果</label>
-                        </div>
-                    </div>
-
-                    <div className="inputs">
-                        <AccountLevelSelect value={accountLevel} onChange={handleLevelChange} />
-                        <NumberInput
-                            id="searches"
-                            kind="searches"
-                            label="搜索次数"
-                            hint={`请输入 ${SETTING_LIMITS.searches.min}～${SETTING_LIMITS.searches.max} 的整数`}
-                            value={searches}
-                            onChange={setSearches}
-                        />
-                        <NumberInput
-                            id="timeout"
-                            kind="timeout"
-                            label="间隔（秒）"
-                            hint={`请输入 ${SETTING_LIMITS.timeout.min}～${SETTING_LIMITS.timeout.max} 的整数`}
-                            value={timeout}
-                            onChange={setTimeoutValue}
-                        />
-                        {isTimeoutRisky && (
-                            <p className="field-warning" role="status">
-                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时 Microsoft 常不计积分，浏览器也可能拉长间隔。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
-                            </p>
-                        )}
-                        <NumberInput
-                            id="closeTime"
-                            kind="closeTime"
-                            label="关闭标签页（秒）"
-                            hint={`请输入 ${SETTING_LIMITS.closeTime.min}～${SETTING_LIMITS.closeTime.max} 的整数，0 表示加载后即关闭`}
-                            value={closeTime}
-                            onChange={setCloseTime}
-                        />
-                    </div>
-                </details>
+                <div className="divider" />
+                <button type="button" className="advanced-row" onClick={() => setShowSettings(true)}>
+                    <span className="advanced-text">
+                        <span className="advanced-title">高级设置</span>
+                        <span className="advanced-sub">{taskSummary(active, autoDaily, claimPoints, searches, timeout)}</span>
+                    </span>
+                    <svg className="advanced-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M9 6l6 6-6 6" />
+                    </svg>
+                </button>
             </section>
 
-            <nav className="footer-links" aria-label="相关页面">
-                <a className="links" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">打开 Rewards</a>
-                <a className="links" href={HELP_URL} target="_blank" rel="noopener noreferrer" id="helpLink">帮助</a>
-            </nav>
+            <a className="ghost-button" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">
+                打开 Rewards
+                <ExternalIcon />
+            </a>
         </main>
+    );
+}
+
+// A one-line restatement of the current settings, so the entry point answers
+// "what am I running?" without opening the settings view.
+function taskSummary(active: boolean, autoDaily: boolean, claimPoints: boolean, searches: number, timeout: number): string {
+    const tasks = [
+        active && '搜索',
+        autoDaily && '每日活动',
+        claimPoints && '领取积分',
+    ].filter(Boolean);
+    if (tasks.length === 0) return '未选择任务';
+    return `${tasks.join(' · ')} · ${searches} 次 · 间隔 ${timeout} 秒`;
+}
+
+interface TaskTileProps {
+    id: string;
+    label: string;
+    checked: boolean;
+    onChange: (checked: boolean) => void;
+}
+
+function TaskTile({ id, label, checked, onChange }: TaskTileProps) {
+    return (
+        <label className={`tile${checked ? ' tile--on' : ''}`} htmlFor={id}>
+            <input
+                className="tile-input"
+                type="checkbox"
+                id={id}
+                checked={checked}
+                onChange={(e) => onChange(e.target.checked)}
+            />
+            <span className="tile-box" aria-hidden="true">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12.5l4.5 4.5L19 7.5" />
+                </svg>
+            </span>
+            {label}
+        </label>
+    );
+}
+
+function ExternalIcon() {
+    return (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+        </svg>
     );
 }
 
