@@ -9,21 +9,23 @@ const LEVELS: { value: string; label: string }[] = [
     { value: 'gold', label: '金级（20 次）' },
 ];
 
-// The label links to the Rewards benefits page so users can check which level
-// they're on. Picking a level sets a sensible default search count.
+// The hint under the control links to the Rewards benefits page so users can
+// check which level they're on. Picking a level sets a sensible default search
+// count. The link sits outside the label on purpose: inside it, the block-level
+// link stacked the control, its label and the link into three separate lines.
 function AccountLevelSelect({ value, onChange }: AccountLevelSelectProps) {
     return (
-        <span className="field">
+        <div className="field">
+            <label htmlFor="accountLevel">账号等级</label>
             <select id="accountLevel" value={value} onChange={(e) => onChange(e.target.value)}>
                 {LEVELS.map((level) => (
                     <option key={level.value} value={level.value}>{level.label}</option>
                 ))}
             </select>
-            <label htmlFor="accountLevel">
-                账号等级
+            <span className="field-hint field-hint--link">
                 <a className="normal-link level-link" href="https://rewards.bing.com/about?section=benefits" target="_blank" rel="noopener noreferrer">查看 Microsoft Rewards 等级</a>
-            </label>
-        </span>
+            </span>
+        </div>
     );
 }
 

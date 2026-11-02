@@ -34,7 +34,8 @@ function NumberInput({ id, label, kind, value, hint, onChange }: NumberInputProp
     }
 
     return (
-        <span className="field">
+        <div className="field">
+            <label htmlFor={id}>{label}</label>
             <input
                 type="text"
                 inputMode="numeric"
@@ -54,9 +55,8 @@ function NumberInput({ id, label, kind, value, hint, onChange }: NumberInputProp
                 }}
                 onBlur={() => commit(draft)}
             />
-            <label htmlFor={id}>{label}</label>
             {invalid && <span id={`${id}-hint`} className="field-hint" role="status">{hint}</span>}
-        </span>
+        </div>
     );
 }
 
