@@ -79,6 +79,17 @@ function App() {
                         ? '已停止'
                         : '准备就绪';
 
+    // The dot next to the status text carries the state at a glance: a run in
+    // flight, one that needs the user's eyes, and a plain idle state must not
+    // all look the same in a line of small text.
+    const statusTone = !isLoaded
+        ? 'idle'
+        : isStopping || isRunning
+            ? 'busy'
+            : hasAttention
+                ? 'attention'
+                : 'idle';
+
     // Picking a level sets a sensible search count; the number field stays
     // editable so the user can still override it. Opening the popup never does
     // this — only an explicit change of the preset does.
@@ -89,64 +100,74 @@ function App() {
 
     return (
         <main className="popup">
-            <h1 className="heading">Rewards 助手</h1>
-            <p className="status-line" role="status">{statusText}</p>
+            <header className="header">
+                <h1 className="heading">Rewards 助手</h1>
+            </header>
 
-            <ManualClaimButton
-                isRunning={isRunning}
-                isStopping={isStopping}
-                canStart={hasTaskSelected}
-                disabled={!isLoaded || isStopping}
-                onStop={() => setStopRequested(true)}
-            />
-            {!hasTaskSelected && !isRunning && (
-                <p className="field-warning" role="status">请在高级设置中选择至少一项任务</p>
-            )}
+            <section className="card card--status" aria-labelledby="status-heading">
+                <h2 id="status-heading" className="visually-hidden">运行状态</h2>
+                <p className={`status-line status-line--${statusTone}`} role="status">
+                    <span className="status-dot" aria-hidden="true" />
+                    {statusText}
+                </p>
 
-            {hasSearchToShow && (
-                <SearchProgressBar completed={completed} total={total} />
-            )}
+                <ManualClaimButton
+                    isRunning={isRunning}
+                    isStopping={isStopping}
+                    canStart={hasTaskSelected}
+                    disabled={!isLoaded || isStopping}
+                    onStop={() => setStopRequested(true)}
+                />
+                {!hasTaskSelected && !isRunning && (
+                    <p className="field-warning" role="status">请在高级设置中选择至少一项任务</p>
+                )}
+                {hasSearchToShow && (
+                    <SearchProgressBar completed={completed} total={total} />
+                )}
+            </section>
+
             {hasResults && (
-                <TaskResultsList results={results} isRunning={isRunning} />
-            )}
-            {hasAttention && (
-                <details className="details" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)}>
-                    <summary>查看详情</summary>
-                    <TaskResultsList results={results} isRunning={isRunning} detailed />
-                </details>
+                <section className="card card--results" aria-labelledby="results-heading">
+                    <h2 id="results-heading" className="card-title">任务结果</h2>
+                    <TaskResultsList results={results} isRunning={isRunning} />
+                    {hasAttention && (
+                        <details className="details" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)}>
+                            <summary>查看详情与重试</summary>
+                            <TaskResultsList results={results} isRunning={isRunning} detailed />
+                        </details>
+                    )}
+                </section>
             )}
 
-            <div className="checkboxes">
+            <section className="card card--settings">
                 <div className="input-with-info">
                     <input className="form-check-input" type="checkbox" id="autoRunEnabled" checked={autoRunEnabled} onChange={(e) => setAutoRunEnabled(e.target.checked)} />
                     <label htmlFor="autoRunEnabled">每日自动执行</label>
                 </div>
-            </div>
 
-            <details className="advanced">
-                <summary>高级设置</summary>
-                <div className="checkboxes">
-                    <div className="input-with-info">
-                        <input className="form-check-input" type="checkbox" id="autoCheckbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                        <label htmlFor="autoCheckbox">执行搜索</label>
+                <details className="advanced">
+                    <summary>高级设置</summary>
+                    <div className="checkboxes">
+                        <div className="input-with-info">
+                            <input className="form-check-input" type="checkbox" id="autoCheckbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+                            <label htmlFor="autoCheckbox">执行搜索</label>
+                        </div>
+                        <div className="input-with-info">
+                            <input className="form-check-input" type="checkbox" id="autoDaily" checked={autoDaily} onChange={(e) => setAutoDaily(e.target.checked)} />
+                            <label htmlFor="autoDaily">完成每日活动</label>
+                        </div>
+                        <div className="input-with-info">
+                            <input className="form-check-input" type="checkbox" id="claimPoints" checked={claimPoints} onChange={(e) => setClaimPoints(e.target.checked)} />
+                            <label htmlFor="claimPoints">领取积分</label>
+                        </div>
+                        <div className="input-with-info">
+                            <input className="form-check-input" type="checkbox" id="openFirstResult" checked={openFirstResult} onChange={(e) => setOpenFirstResult(e.target.checked)} />
+                            <label htmlFor="openFirstResult">打开首个搜索结果</label>
+                        </div>
                     </div>
-                    <div className="input-with-info">
-                        <input className="form-check-input" type="checkbox" id="autoDaily" checked={autoDaily} onChange={(e) => setAutoDaily(e.target.checked)} />
-                        <label htmlFor="autoDaily">完成每日活动</label>
-                    </div>
-                    <div className="input-with-info">
-                        <input className="form-check-input" type="checkbox" id="claimPoints" checked={claimPoints} onChange={(e) => setClaimPoints(e.target.checked)} />
-                        <label htmlFor="claimPoints">领取积分</label>
-                    </div>
-                    <div className="input-with-info">
-                        <input className="form-check-input" type="checkbox" id="openFirstResult" checked={openFirstResult} onChange={(e) => setOpenFirstResult(e.target.checked)} />
-                        <label htmlFor="openFirstResult">打开首个搜索结果</label>
-                    </div>
-                </div>
 
-                <div className="inputs">
-                    <AccountLevelSelect value={accountLevel} onChange={handleLevelChange} />
-                    <div>
+                    <div className="inputs">
+                        <AccountLevelSelect value={accountLevel} onChange={handleLevelChange} />
                         <NumberInput
                             id="searches"
                             kind="searches"
@@ -155,8 +176,6 @@ function App() {
                             value={searches}
                             onChange={setSearches}
                         />
-                    </div>
-                    <div>
                         <NumberInput
                             id="timeout"
                             kind="timeout"
@@ -170,8 +189,6 @@ function App() {
                                 短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时，Microsoft 常常不计积分，浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长。填 0 时实际大约相隔 1 秒，不会一次打开全部标签页。
                             </p>
                         )}
-                    </div>
-                    <div>
                         <NumberInput
                             id="closeTime"
                             kind="closeTime"
@@ -181,8 +198,8 @@ function App() {
                             onChange={setCloseTime}
                         />
                     </div>
-                </div>
-            </details>
+                </details>
+            </section>
 
             <nav className="footer-links" aria-label="相关页面">
                 <a className="links" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">打开 Rewards</a>

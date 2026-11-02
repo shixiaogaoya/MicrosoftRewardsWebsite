@@ -1,46 +1,110 @@
 body {
-    width: 20em;
+    width: 22em;
+    max-width: 100%;
     margin: 0;
     font-size: 16px;
-    color: #18272F;
-    background-color: #f4f7f6;
+    line-height: 1.5;
+    color: #1b2b31;
+    background-color: #eef3f1;
 }
 
 .popup {
     display: flex;
     flex-direction: column;
-    gap: 0.55rem;
-    padding: 0.75rem 0.85rem 0.65rem;
+    gap: 0.6rem;
+    padding: 0.7rem 0.75rem 0.6rem;
+}
+
+.header {
+    padding-bottom: 0.1rem;
 }
 
 .heading {
     margin: 0;
-    color: #1a6f8c;
-    font-size: 1.15rem;
+    color: #14647f;
+    font-size: 1.1rem;
     font-weight: 700;
+    letter-spacing: 0.01em;
     text-align: center;
 }
 
-.status-line {
-    margin: 0;
-    text-align: center;
-    font-size: 0.9rem;
+/* ---- cards -------------------------------------------------------------- */
+
+/* One surface per concern, so the eye groups the popup into "what is happening
+   now" and "what to configure" instead of one flat column of text. */
+.card {
+    padding: 0.6rem 0.65rem;
+    background-color: #fff;
+    border: 1px solid #dbe6e2;
+    border-radius: 0.5rem;
 }
+
+.card-title {
+    margin: 0 0 0.35rem;
+    color: #5b6f75;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.card--status {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* ---- status ------------------------------------------------------------- */
+
+.status-line {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    margin: 0;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.status-dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    flex: none;
+    border-radius: 999px;
+    background-color: #9aa9a4;
+}
+
+.status-line--busy .status-dot {
+    background-color: #2282ad;
+    box-shadow: 0 0 0 3px rgba(34, 130, 173, 0.16);
+}
+
+.status-line--attention .status-dot {
+    background-color: #c47d10;
+    box-shadow: 0 0 0 3px rgba(196, 125, 16, 0.16);
+}
+
+.status-line--attention {
+    color: #8a5300;
+}
+
+/* ---- primary action ----------------------------------------------------- */
 
 .action-button {
     width: 100%;
     padding: 0.55rem 0.75rem;
-    font-size: 1rem;
+    font-size: 0.95rem;
 }
 
 .btn {
     display: inline-block;
     font-weight: 600;
+    font-family: inherit;
     color: #fff;
     text-align: center;
     background-color: #2282ad;
     border: 1px solid #2282ad;
-    border-radius: 0.35rem;
+    border-radius: 0.4rem;
     line-height: 1.4;
 }
 
@@ -50,8 +114,12 @@ body {
 }
 
 .btn-fail {
-    background-color: #5b5f5c;
-    border-color: #5b5f5c;
+    background-color: #6b7370;
+    border-color: #6b7370;
+}
+
+.btn-fail:hover:not(:disabled) {
+    background-color: #565e5b;
 }
 
 .btn:disabled {
@@ -60,13 +128,60 @@ body {
 }
 
 .my-1 {
-    margin-top: 0.1rem;
-    margin-bottom: 0.1rem;
+    margin: 0;
 }
 
+/* ---- form controls ------------------------------------------------------ */
+
 .form-check-input {
-    accent-color: #2282ad;
+    width: 0.95rem;
+    height: 0.95rem;
+    flex: none;
     margin: 0;
+    accent-color: #2282ad;
+}
+
+.checkboxes {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.input-with-info {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.86rem;
+}
+
+.input-with-info label {
+    cursor: pointer;
+}
+
+/* Label left, control right: a settings row reads as one unit instead of the
+   control appearing to own the text after it. */
+.field {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 0.2rem 0.6rem;
+}
+
+.field label {
+    font-size: 0.84rem;
+    line-height: 1.35;
+    color: #3c4f55;
+}
+
+.field-hint {
+    grid-column: 1 / -1;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: #8a5300;
+}
+
+.field-hint--link {
+    color: #5b6f75;
 }
 
 select,
@@ -74,94 +189,104 @@ input[type="text"] {
     box-sizing: border-box;
     width: 7.5rem;
     font-family: inherit;
-    font-size: 0.85rem;
-    padding: 0.25rem 0.4rem;
-    color: #18272F;
+    font-size: 0.84rem;
+    padding: 0.28rem 0.4rem;
+    color: #1b2b31;
     background-color: #fff;
-    border: 1px solid #b7c9c4;
-    border-radius: 0.25rem;
+    border: 1px solid #c3d2cd;
+    border-radius: 0.3rem;
 }
 
 select:focus,
 input[type="text"]:focus {
-    outline: 2px solid rgba(34, 130, 173, 0.45);
+    outline: 2px solid rgba(34, 130, 173, 0.4);
     outline-offset: 1px;
 }
 
-.field {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.35rem 0.55rem;
-}
-
-.field label {
-    font-size: 0.85rem;
-    line-height: 1.3;
-}
-
-.field-hint {
-    flex-basis: 100%;
-    font-size: 0.75rem;
-    line-height: 1.35;
-    color: #8a5300;
+input[type="text"][aria-invalid="true"] {
+    border-color: #c47d10;
 }
 
 .level-link {
-    display: block;
-    margin-top: 0.15rem;
     color: #2282ad;
-    font-weight: 600;
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     text-decoration: underline;
     text-underline-offset: 2px;
 }
 
-.checkboxes {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-}
-
-.input-with-info {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-}
-
-.inputs {
-    display: flex;
-    flex-direction: column;
-    gap: 0.45rem;
-    margin-top: 0.45rem;
-}
-
 .field-warning {
+    grid-column: 1 / -1;
     margin: 0;
-    font-size: 0.75rem;
-    line-height: 1.35;
+    font-size: 0.72rem;
+    line-height: 1.4;
     color: #8a5300;
 }
+
+/* ---- collapsible sections ---------------------------------------------- */
 
 .advanced,
 .details {
     text-align: left;
 }
 
+/* Inside a card the disclosure is a divider-separated block, not a peer of the
+   card's own content. */
+.card--settings .advanced {
+    padding-top: 0.5rem;
+    border-top: 1px solid #eaf1ee;
+}
+
 .advanced summary,
 .details summary {
     cursor: pointer;
-    color: #1a6f8c;
-    font-size: 0.85rem;
+    color: #14647f;
+    font-size: 0.83rem;
+    font-weight: 600;
+    list-style: none;
 }
 
-.advanced .checkboxes,
-.advanced .inputs {
-    margin-left: 0.2rem;
+.advanced summary::-webkit-details-marker,
+.details summary::-webkit-details-marker {
+    display: none;
 }
+
+.advanced summary::before,
+.details summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 1em;
+    color: #7f949b;
+    transform-origin: 50% 50%;
+    transition: transform 0.12s ease;
+}
+
+.advanced[open] summary::before,
+.details[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.advanced .checkboxes {
+    margin-top: 0.5rem;
+    padding-left: 1em;
+}
+
+.inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin-top: 0.6rem;
+    padding-left: 1em;
+}
+
+.details {
+    margin-top: 0.35rem;
+    padding-top: 0.4rem;
+    border-top: 1px solid #f0f5f3;
+}
+
+/* ---- progress ----------------------------------------------------------- */
 
 .progress-card {
-    padding: 0.45rem 0.15rem 0.15rem;
     text-align: left;
 }
 
@@ -170,23 +295,24 @@ input[type="text"]:focus {
     align-items: baseline;
     justify-content: space-between;
     gap: 0.5rem;
-    margin-bottom: 0.3rem;
+    margin-bottom: 0.35rem;
 }
 
 .progress-count {
-    font-size: 0.85rem;
-    color: #18272F;
+    font-size: 0.8rem;
+    color: #3c4f55;
     font-variant-numeric: tabular-nums;
 }
 
 .progress-count strong {
-    color: #1a6f8c;
+    color: #14647f;
+    font-size: 0.92rem;
 }
 
 .progress-track {
-    height: 0.4rem;
+    height: 0.45rem;
     border-radius: 999px;
-    background-color: #dbeae5;
+    background-color: #e3ece8;
     overflow: hidden;
 }
 
@@ -194,64 +320,90 @@ input[type="text"]:focus {
     height: 100%;
     border-radius: 999px;
     background-color: #2282ad;
+    transition: width 0.2s ease;
 }
+
+/* ---- task results ------------------------------------------------------- */
 
 .task-results {
     list-style: none;
-    margin: 0.35rem 0 0;
+    margin: 0;
     padding: 0;
 }
 
 .task-result {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.25rem 0.5rem;
     align-items: baseline;
-    font-size: 0.78rem;
-    padding: 0.15rem 0;
+    gap: 0.2rem 0.5rem;
+    padding: 0.3rem 0;
+    font-size: 0.82rem;
+    border-top: 1px solid #f0f5f3;
+}
+
+.task-result:first-child {
+    border-top: 0;
+    padding-top: 0;
 }
 
 .task-result-name {
     font-weight: 600;
+    min-width: 4.6em;
+}
+
+.task-result-status {
+    color: #5b6f75;
 }
 
 .task-result--failed .task-result-status,
 .task-result--unconfirmed .task-result-status,
 .task-result--cancelled .task-result-status {
     color: #8a5300;
+    font-weight: 600;
 }
 
 .task-result--completed .task-result-status,
 .task-result--not-needed .task-result-status {
     color: #2e7d57;
+    font-weight: 600;
 }
 
 .task-result-reason {
     flex-basis: 100%;
-    color: #5b5f5c;
+    padding-left: 4.6em;
+    font-size: 0.76rem;
+    color: #6b7b80;
 }
 
 .task-retry {
     border: 0;
     background: none;
     padding: 0;
-    color: #1a6f8c;
+    color: #14647f;
     cursor: pointer;
-    font-size: 1em;
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
     text-decoration: underline;
     text-underline-offset: 2px;
 }
 
+/* ---- footer ------------------------------------------------------------- */
+
 .footer-links {
     display: flex;
     justify-content: space-between;
-    padding-top: 0.15rem;
+    padding: 0.1rem 0.15rem 0;
 }
 
 .links {
-    color: #1a6f8c;
-    font-size: 0.85rem;
+    color: #14647f;
+    font-size: 0.8rem;
     font-weight: 600;
+    text-decoration: none;
+}
+
+.links:hover {
     text-decoration: underline;
     text-underline-offset: 2px;
 }
@@ -260,6 +412,19 @@ input[type="text"]:focus {
 .task-retry:focus-visible,
 summary:focus-visible,
 .btn:focus-visible {
-    outline: 2px solid #1a6f8c;
+    outline: 2px solid #14647f;
     outline-offset: 2px;
+}
+
+/* Available to a screen reader, not drawn. */
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
 }
