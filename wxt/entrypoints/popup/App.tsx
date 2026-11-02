@@ -147,7 +147,7 @@ function App() {
 
                 <details className="advanced">
                     <summary>高级设置</summary>
-                    <div className="checkboxes">
+                    <div className="checkboxes checkboxes--grid">
                         <div className="input-with-info">
                             <input className="form-check-input" type="checkbox" id="autoCheckbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
                             <label htmlFor="autoCheckbox">执行搜索</label>
@@ -162,7 +162,7 @@ function App() {
                         </div>
                         <div className="input-with-info">
                             <input className="form-check-input" type="checkbox" id="openFirstResult" checked={openFirstResult} onChange={(e) => setOpenFirstResult(e.target.checked)} />
-                            <label htmlFor="openFirstResult">打开首个搜索结果</label>
+                            <label htmlFor="openFirstResult">打开首个结果</label>
                         </div>
                     </div>
 
@@ -179,21 +179,21 @@ function App() {
                         <NumberInput
                             id="timeout"
                             kind="timeout"
-                            label="搜索间隔（秒）"
+                            label="间隔（秒）"
                             hint={`请输入 ${SETTING_LIMITS.timeout.min}～${SETTING_LIMITS.timeout.max} 的整数`}
                             value={timeout}
                             onChange={setTimeoutValue}
                         />
                         {isTimeoutRisky && (
                             <p className="field-warning" role="status">
-                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时，Microsoft 常常不计积分，浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长。填 0 时实际大约相隔 1 秒，不会一次打开全部标签页。
+                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时 Microsoft 常不计积分，浏览器也可能拉长间隔。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
                             </p>
                         )}
                         <NumberInput
                             id="closeTime"
                             kind="closeTime"
-                            label="标签页关闭时间（秒）"
-                            hint={`请输入 ${SETTING_LIMITS.closeTime.min}～${SETTING_LIMITS.closeTime.max} 的整数。0 表示页面加载后就关闭`}
+                            label="关闭标签页（秒）"
+                            hint={`请输入 ${SETTING_LIMITS.closeTime.min}～${SETTING_LIMITS.closeTime.max} 的整数，0 表示加载后即关闭`}
                             value={closeTime}
                             onChange={setCloseTime}
                         />
