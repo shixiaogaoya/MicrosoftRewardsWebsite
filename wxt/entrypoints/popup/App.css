@@ -86,7 +86,7 @@ select {
     height: 1.9rem;
     flex: none;
     color: #fff;
-    background-color: var(--primary);
+    background-color: transparent;
     border-radius: 0.6rem;
 }
 

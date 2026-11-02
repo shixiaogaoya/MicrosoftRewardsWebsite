@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64" role="img" aria-label="Rewards 助手 R 标识">
+  <defs>
+    <linearGradient id="blue" x1="6" y1="4" x2="60" y2="66" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#438EF2"/>
+      <stop offset="1" stop-color="#4651CF"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#blue)"/>
+  <rect x=".5" y=".5" width="63" height="63" rx="15.5" fill="none" stroke="#fff" stroke-opacity=".15"/>
+  <path fill="#fff" fill-rule="evenodd" d="M17 15.5h15.5c9.7 0 15.5 5.3 15.5 13.1 0 7.9-5.8 13-15.5 13H25v8h-8V15.5Zm8 7.8v10.5h7.1c5.1 0 7.8-1.8 7.8-5.2 0-3.5-2.7-5.3-7.8-5.3H25Z"/>
+  <path fill="#8AF0D1" d="m30 35.8 7.4-3.3L50 49.6H39.5L30 35.8Z"/>
+</svg>

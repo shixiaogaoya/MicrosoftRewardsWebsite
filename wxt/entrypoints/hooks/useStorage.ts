@@ -1,4 +1,4 @@
-import {useState, useEffect} from "react";
+import {useState, useEffect, useRef} from "react";
 import {StorageValues} from "@/entrypoints/enums/storageValues.ts"
 import { storage } from '#imports';
 import {StorageItem} from "@/entrypoints/types/storageItem.ts";
@@ -11,26 +11,35 @@ export function useStorage<T>(key: string, defaultValue: T, storageType: Storage
     const storageKey = `${storageType}:${key}` as StorageItemKey;
     const [value, setValue] = useState<T>(defaultValue);
     const [isInitialized, setIsInitialized] = useState(false);
-    // The value the first read produced. A default that was only *read* is not
-    // a choice the user made, so it must not be written back: the background
-    // may still be deriving the real value (the auto-run migration runs after
-    // the popup can open), and echoing the default would overwrite it.
-    const [loadedValue, setLoadedValue] = useState<T | undefined>(undefined);
+    // True only while the first read is still being applied to state. A default
+    // that was only *read* is not a choice the user made, so it must not be
+    // written back: the background may still be deriving the real value (the
+    // auto-run migration runs after the popup can open), and echoing the
+    // default would overwrite it. Once the user changes the control, later
+    // values — including a return to that first reading — are their choice.
+    const hydrating = useRef(true);
 
     useEffect(() => {
+        let cancelled = false;
+        hydrating.current = true;
         storage.getItem(storageKey).then((stored: any) => {
-            const initial = (stored ?? defaultValue) as T;
-            setValue(initial);
-            setLoadedValue(initial);
+            if (cancelled) return;
+            setValue((stored ?? defaultValue) as T);
             setIsInitialized(true);
         });
+        return () => {
+            cancelled = true;
+        };
     }, [storageKey]);
 
     useEffect(() => {
-        if (isInitialized && loadedValue !== undefined && value !== loadedValue) {
-            void storage.setItem(storageKey, value);
+        if (!isInitialized) return;
+        if (hydrating.current) {
+            hydrating.current = false;
+            return;
         }
-    }, [storageKey, value, loadedValue, isInitialized]);
+        void storage.setItem(storageKey, value);
+    }, [storageKey, value, isInitialized]);
 
     return [value, setValue] as const;
 }

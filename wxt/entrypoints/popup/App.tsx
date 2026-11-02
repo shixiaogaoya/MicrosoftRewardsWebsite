@@ -6,7 +6,7 @@ import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { DEFAULTS, LEVEL_SEARCHES, SETTING_LIMITS, clampSetting } from '@/entrypoints/utils/settings';
 import { clearBadge } from '@/entrypoints/utils/browserAction';
 import { RECOMMENDED_MIN_TIMEOUT_SECONDS } from '@/entrypoints/utils/search';
-import type { TaskResult, TaskStatus } from '@/entrypoints/utils/runState';
+import type { TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
 import NumberInput from '@/entrypoints/components/NumberInput';
 import AccountLevelSelect from '@/entrypoints/components/AccountLevelSelect';
 import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
@@ -18,7 +18,8 @@ import TaskResultsList from '@/entrypoints/components/TaskResults';
 const HELP_URL = 'https://github.com/shixiaogaoya/MicrosoftRewardsWebsite#readme';
 const REWARDS_URL = 'https://rewards.bing.com/';
 
-const QUIET: ReadonlySet<TaskStatus> = new Set(['completed', 'not-needed']);
+// A running task is still in progress, not something the user has to confirm.
+const NEEDS_ATTENTION: ReadonlySet<TaskStatus> = new Set(['failed', 'unconfirmed', 'cancelled']);
 
 const LEVEL_LABELS: Record<string, string> = {
     member: '会员 · 5 次',
@@ -26,8 +27,12 @@ const LEVEL_LABELS: Record<string, string> = {
     gold: '金级 · 20 次',
 };
 
-function needsAttention(result: TaskResult | undefined): boolean {
-    return result != null && !QUIET.has(result.status);
+export function needsAttention(result: TaskResult | undefined): boolean {
+    return result != null && NEEDS_ATTENTION.has(result.status);
+}
+
+export function countAttention(results: TaskResults): number {
+    return [results.search, results.daily, results.claim].filter(needsAttention).length;
 }
 
 function App() {
@@ -98,7 +103,7 @@ function App() {
                 ? 'attention'
                 : 'idle';
 
-    const attentionCount = [results.search, results.daily, results.claim].filter(needsAttention).length;
+    const attentionCount = countAttention(results);
 
     // Picking a level sets a sensible search count; the number field stays
     // editable so the user can still override it. Opening the popup never does
@@ -201,9 +206,7 @@ function App() {
             <header className="header">
                 <div className="brand">
                     <span className="brand-mark" aria-hidden="true">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.5 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" />
-                        </svg>
+                        <img src="/imgs/rewards-r.svg" width="30" height="30" alt="" />
                     </span>
                     <h1 className="heading">Rewards 助手</h1>
                 </div>
