@@ -173,12 +173,17 @@ export async function scheduleDailyCheckAlarm(): Promise<void> {
         (s.claimPoints ?? DEFAULTS.claimPoints);
     if (!autoRun || !hasTask) {
         await browser.alarms.clear(DAILY_CHECK_ALARM);
+        await noteDailyCheckScheduled();
         return;
     }
     // Creating an alarm replaces it, which restarts the six-hour period. A worker
     // that woke an hour into that period must leave the schedule it already has.
-    if (await browser.alarms.get(DAILY_CHECK_ALARM)) return;
-    browser.alarms.create(DAILY_CHECK_ALARM, { periodInMinutes: DAILY_CHECK_PERIOD_MINUTES });
+    if (await browser.alarms.get(DAILY_CHECK_ALARM)) {
+        await noteDailyCheckScheduled();
+        return;
+    }
+    await browser.alarms.create(DAILY_CHECK_ALARM, { periodInMinutes: DAILY_CHECK_PERIOD_MINUTES });
+    await noteDailyCheckScheduled();
 }
 
 export async function handleDailyCheckAlarm(alarm: { name: string }): Promise<void> {
@@ -191,10 +196,20 @@ export async function handleDailyCheckAlarm(alarm: { name: string }): Promise<vo
 // than waiting for the next restart — including a toggle synced in from
 // another device. Turning auto-run off does not stop a round already running.
 export function watchDailyFeatureToggles(): void {
-    storage.watch<boolean>('sync:autoRunEnabled', () => void scheduleDailyCheckAlarm());
-    storage.watch<boolean>('sync:active', () => void scheduleDailyCheckAlarm());
-    storage.watch<boolean>('sync:autoDaily', () => void scheduleDailyCheckAlarm());
-    storage.watch<boolean>('sync:claimPoints', () => void scheduleDailyCheckAlarm());
+    const reschedule = () => void scheduleDailyCheckAlarm();
+    storage.watch<boolean>('sync:autoRunEnabled', reschedule);
+    storage.watch<boolean>('sync:active', reschedule);
+    storage.watch<boolean>('sync:autoDaily', reschedule);
+    storage.watch<boolean>('sync:claimPoints', reschedule);
+}
+
+const SCHEDULE_STAMP_KEY = 'dailyCheckScheduledAt';
+
+// Written after the alarm create or clear above has settled. The popup reads the
+// alarm when this changes, so it does not sample the old schedule in the gap
+// between the setting write and the background finishing the reschedule.
+function noteDailyCheckScheduled(): Promise<void> {
+    return setStorageItems({ [SCHEDULE_STAMP_KEY]: Date.now() }, StorageValues.LOCAL);
 }
 
 export async function handleInstallOrUpdate(details: { reason: string }): Promise<void> {

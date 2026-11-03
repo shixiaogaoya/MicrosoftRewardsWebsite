@@ -100,5 +100,5 @@ async function openDailySets(stopped: () => Promise<boolean>): Promise<TaskResul
     if (await stopped()) {
         return { status: 'cancelled', reason: clicked > 0 ? `已停止，已点击 ${clicked} 张卡片` : '已停止' };
     }
-    return { status: 'unconfirmed', reason: `已点击 ${clicked} 张卡片，页面没有完成标记` };
+    return { status: 'unconfirmed', reason: `已点击 ${clicked} 张卡片，页面没有完成标记。点击、关闭页面或等待结束都不能当作完成` };
 }

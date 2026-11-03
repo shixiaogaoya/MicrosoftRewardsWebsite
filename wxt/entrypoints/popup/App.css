@@ -214,10 +214,16 @@ select {
     background-color: var(--warn-bg);
 }
 
-.level-note {
-    font-size: 0.76rem;
+.status-pill--done {
+    color: var(--success-text);
+    background-color: var(--success-bg);
+}
+
+.round-note {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.4;
     color: var(--muted);
-    white-space: nowrap;
 }
 
 /* ---- progress ring ------------------------------------------------------ */
@@ -836,4 +842,124 @@ select {
     font-size: 0.74rem;
     line-height: 1.45;
     color: var(--warn-text);
+}
+
+.field-note {
+    margin: 0;
+    font-size: 0.74rem;
+    line-height: 1.45;
+    color: var(--muted);
+}
+
+.auto-note {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    margin-top: 0.25rem;
+}
+
+.preset-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.preset-label {
+    flex: none;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.preset-buttons {
+    display: flex;
+    flex: 1;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.preset-button {
+    flex: 1;
+    min-width: 0;
+    min-height: 1.85rem;
+    padding: 0.15rem 0.2rem;
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--text);
+    background-color: var(--surface);
+    border: 1.5px solid var(--border-strong);
+    border-radius: 0.55rem;
+    cursor: pointer;
+}
+
+.preset-button--on {
+    color: #1e5f9e;
+    background-color: #eaf2fc;
+    border-color: var(--primary);
+}
+
+.preset-button:hover {
+    border-color: var(--primary);
+}
+
+.preset-button:focus-visible {
+    outline: 2px solid rgba(69, 134, 218, 0.45);
+    outline-offset: 1px;
+}
+
+.preset-custom {
+    flex: none;
+    font-size: 0.74rem;
+    color: #9aafc0;
+}
+
+.preset-custom--on {
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.search-option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.search-option .tile {
+    min-height: 2.3rem;
+}
+
+.save-note {
+    margin: 0;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--success-text);
+}
+
+.save-note--error {
+    color: var(--warn-text);
+}
+
+.save-retry {
+    margin-left: 0.45rem;
+    padding: 0;
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--primary);
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
+.save-retry:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.save-retry:focus-visible {
+    outline: 2px solid rgba(69, 134, 218, 0.45);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
 }

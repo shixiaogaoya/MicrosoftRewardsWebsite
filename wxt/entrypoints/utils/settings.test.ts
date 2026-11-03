@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS, clampSetting, parseSettingInput } from './settings';
+import { DEFAULTS, clampSetting, matchingSearchPreset, parseSettingInput } from './settings';
 
 describe('parseSettingInput', () => {
   it('accepts an integer inside each range, including the documented zeros', () => {
@@ -21,6 +21,16 @@ describe('parseSettingInput', () => {
     expect(parseSettingInput('timeout', '10000')).toBeNull();
     expect(parseSettingInput('closeTime', '301')).toBeNull();
     expect(parseSettingInput('searches', 'abc')).toBeNull();
+  });
+});
+
+describe('matchingSearchPreset', () => {
+  it('highlights only an exact shortcut count', () => {
+    expect(matchingSearchPreset(5)).toBe(5);
+    expect(matchingSearchPreset(10)).toBe(10);
+    expect(matchingSearchPreset(20)).toBe(20);
+    expect(matchingSearchPreset(30)).toBeNull();
+    expect(matchingSearchPreset(1)).toBeNull();
   });
 });
 

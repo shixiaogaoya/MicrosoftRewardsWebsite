@@ -25,13 +25,16 @@ export const DEFAULTS = {
     autoRunEnabled: true,
 } as const;
 
-// Selecting an account level sets a sensible default number of daily searches
-// (the user can still override the number manually).
-export const LEVEL_SEARCHES: Record<string, number> = {
-    member: 5,
-    silver: 10,
-    gold: 20,
-};
+// Shortcut counts for the search-count field. They are not an account tier:
+// clicking one writes `searches` and nothing else. `searches` is the only value
+// a round reads.
+export const SEARCH_PRESETS = [5, 10, 20] as const;
+
+export type SearchPreset = (typeof SEARCH_PRESETS)[number];
+
+export function matchingSearchPreset(searches: number): SearchPreset | null {
+    return (SEARCH_PRESETS as readonly number[]).includes(searches) ? searches as SearchPreset : null;
+}
 
 export type NumericSetting = 'searches' | 'timeout' | 'closeTime';
 

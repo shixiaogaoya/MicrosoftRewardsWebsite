@@ -389,6 +389,59 @@ describe('scheduleDailyCheckAlarm', () => {
 
     expect(await fakeBrowser.alarms.get('dailyCheck')).toBeUndefined();
   });
+
+  it('stamps the schedule after clearing it, then again after arming it', async () => {
+    await seed({ autoRunEnabled: false });
+    fakeBrowser.alarms.create('dailyCheck', { periodInMinutes: 360 });
+
+    await scheduleDailyCheckAlarm();
+
+    expect(await fakeBrowser.alarms.get('dailyCheck')).toBeUndefined();
+    const clearedAt = await getStorageItem<number>('dailyCheckScheduledAt', StorageValues.LOCAL);
+    expect(clearedAt).toEqual(expect.any(Number));
+
+    await setStorageItem('autoRunEnabled', true, StorageValues.SYNC);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await scheduleDailyCheckAlarm();
+
+    expect(await fakeBrowser.alarms.get('dailyCheck')).toBeDefined();
+    const armedAt = await getStorageItem<number>('dailyCheckScheduledAt', StorageValues.LOCAL);
+    expect(armedAt).toEqual(expect.any(Number));
+    expect(armedAt).toBeGreaterThan(clearedAt ?? 0);
+  });
+
+  it('does not stamp the schedule until alarm creation settles', async () => {
+    await seed({});
+    let releaseCreate: () => void = () => undefined;
+    const pending = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    const original = fakeBrowser.alarms.create.bind(fakeBrowser.alarms);
+    vi.spyOn(fakeBrowser.alarms, 'create').mockImplementation((...args: Parameters<typeof fakeBrowser.alarms.create>) =>
+      pending.then(() => original(...args))
+    );
+
+    const scheduling = scheduleDailyCheckAlarm();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(await getStorageItem('dailyCheckScheduledAt', StorageValues.LOCAL)).toBeNull();
+
+    releaseCreate();
+    await scheduling;
+
+    expect(await fakeBrowser.alarms.get('dailyCheck')).toBeDefined();
+    expect(await getStorageItem<number>('dailyCheckScheduledAt', StorageValues.LOCAL)).toEqual(expect.any(Number));
+  });
+
+  it('does not stamp the schedule when alarm creation fails', async () => {
+    await seed({});
+    vi.spyOn(fakeBrowser.alarms, 'create').mockRejectedValueOnce(new Error('alarms unavailable'));
+
+    await expect(scheduleDailyCheckAlarm()).rejects.toThrow('alarms unavailable');
+
+    expect(await getStorageItem('dailyCheckScheduledAt', StorageValues.LOCAL)).toBeNull();
+  });
 });
 
 describe('handleDailyCheckAlarm', () => {
