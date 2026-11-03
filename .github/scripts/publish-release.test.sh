@@ -108,6 +108,13 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${FIXTURE_DIR}/git.log"
 if [[ "$1" == "tag" ]]; then
   [[ "$2" == "-a" && "$4" == "$BUILD_SHA" && "$5" == "-F" ]] || exit 2
+  # Annotated tags record a tagger; the CI runner has no git identity, so the
+  # script must supply one. Fail here the way git does when it is missing.
+  [[ -n "${GIT_AUTHOR_NAME:-}" && -n "${GIT_AUTHOR_EMAIL:-}" \
+     && -n "${GIT_COMMITTER_NAME:-}" && -n "${GIT_COMMITTER_EMAIL:-}" ]] || {
+    echo "Committer identity unknown" >&2
+    exit 128
+  }
   cp "$6" "${FIXTURE_DIR}/tag-message"
   printf '%s %s\n' "$3" "$4" > "${FIXTURE_DIR}/state/local-tag"
   exit 0

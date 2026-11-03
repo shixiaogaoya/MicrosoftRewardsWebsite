@@ -166,7 +166,13 @@ Rewards 助手 ${package_version}
 
 此 Release 只发布到 GitHub，不代表已发布到 Chrome 网上应用店。使用前请查看仓库 README 的已知问题与验证范围。
 EOF
-  git tag -a "$release_tag" "$BUILD_SHA" -F "$notes_file"
+  # An annotated tag records a tagger, and the runner has no git identity.
+  # Pass one explicitly instead of relying on repository or global config.
+  GIT_AUTHOR_NAME="github-actions[bot]" \
+  GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+  GIT_COMMITTER_NAME="github-actions[bot]" \
+  GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
+    git tag -a "$release_tag" "$BUILD_SHA" -F "$notes_file"
   git push origin "refs/tags/${release_tag}"
   api_status "repos/${GH_REPO}/git/ref/tags/${release_tag}"
   require_status "$API_STATUS" "200" "创建标签后未能在远端确认 $release_tag"
