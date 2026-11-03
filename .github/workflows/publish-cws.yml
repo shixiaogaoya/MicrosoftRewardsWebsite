@@ -1,0 +1,71 @@
+name: 发布到 Chrome 网上应用店（手动）
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: check 只读取商店状态、不上传不提审；submit 会从指定 Release 上传 Chrome ZIP 并提交审核
+        type: choice
+        required: true
+        default: check
+        options:
+          - check
+          - submit
+      release_tag:
+        description: 仅 submit 必填：已存在的正式 Release 标签，例如 v3.1.3；check 忽略此项
+        type: string
+        required: false
+        default: ''
+
+# Read-only for repository contents. The store write happens through the
+# time-limited Google token below, not through the GitHub token.
+permissions:
+  contents: read
+
+jobs:
+  store:
+    name: Chrome 网上应用店
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Required by google-github-actions/auth to mint the WIF OIDC token.
+      id-token: write
+    concurrency:
+      # Store operations are serialized. An upload or submission already in
+      # progress must never be cancelled, because the store may have accepted it.
+      group: rewards-cws-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      MODE: ${{ inputs.mode }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      CWS_WIF_PROVIDER: ${{ vars.CWS_WIF_PROVIDER }}
+      CWS_SERVICE_ACCOUNT: ${{ vars.CWS_SERVICE_ACCOUNT }}
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: 校验运行分支、模式与商店配置
+        shell: bash
+        run: bash .github/scripts/publish-cws.sh preflight
+
+      - name: 通过 WIF 获取 Chrome Web Store 访问令牌
+        id: cws_auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.CWS_WIF_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          create_credentials_file: false
+
+      - name: 读取商店状态或提交审核
+        shell: bash
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.cws_auth.outputs.access_token }}
+        run: bash .github/scripts/publish-cws.sh "$MODE"

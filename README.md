@@ -171,7 +171,47 @@ npm ci
 
 构建输出位于 `wxt/dist/`，不加入 Git 跟踪。发布时应从确定的提交生成标签和对应产物，在发布说明中区分模拟验证与浏览器实测。创建 GitHub Release 不等于已发布到浏览器商店。
 
-GitHub Actions 支持在线构建：更新 `master` 或手动运行「在线构建扩展」后，可在运行记录的 Artifacts 下载 ZIP。推送以 `v` 开头的版本标签时，会在两个浏览器的检查、测试和打包均通过后自动创建 Release 并上传 ZIP；标签说明用作发布说明，名称含 `-` 的标签（如 `v3.1.3-beta.1`）会标记为预发布版。创建 Release 或完成本地构建，都不等于已经发布到 Chrome 网上应用店。
+GitHub Actions 支持在线构建和 GitHub Release。工作流名为「在线构建扩展（可能创建 Release）」：更新 `master`、手动运行，或推送以 `v` 开头的标签时，都会对**本次提交**做类型检查、单元测试和 Chrome／Firefox 打包。任一环节失败则不会发布。ZIP 可在运行记录的 Artifacts 下载。
+
+正式版本取本次提交里 `wxt/package.json` 的 `version`，对应标签为 `v${version}`（当前为 `v3.1.3`）。`master` 推送或手动运行时，只有该 Release **尚不存在**才会创建指向本次提交的附注标签并上传两份 ZIP；同一版本之后的普通提交仍运行检查和打包，但跳过发布，不移动已有标签，也不覆盖已有 Release。手动运行必须勾选确认项，因为确认后可能创建 Release。
+
+推送已有的 `v*` 标签时仍会发布，但正式标签必须与包内版本一致，且标签必须指向本次构建的提交；名称含 `-` 的标签（如 `v3.1.3-beta.1`）沿用预发布处理，并使用该标签自己的附注作为发布说明。已有 Release 时直接跳过。自动创建的标签附注会写明版本、提交和两个 ZIP 的用途，供 `--notes-from-tag` 使用。这些操作只使用 GitHub 自带的 `GITHUB_TOKEN` 创建 GitHub Release，不连接 Chrome 网上应用店，也不读取商店发布凭据。创建 Release 或完成本地构建，都不等于已经发布到商店。
+
+### 发布到 Chrome 网上应用店
+
+商店发布是独立的手动工作流「发布到 Chrome 网上应用店（手动）」（`.github/workflows/publish-cws.yml`），与上面的 GitHub Release 流程互不影响。它只做两件事：读取商店状态，或把已存在的 Release 中的 Chrome ZIP 上传并提交审核。ZIP 直接取自 Release，不重新构建。
+
+认证使用 Workload Identity Federation（WIF）换取短期访问令牌，不使用 JSON 密钥文件、refresh token 或长期凭据。仓库需要在 **Settings → Secrets and variables → Actions → Variables** 里配置四个 Repository Variable：
+
+| Variable | 内容 |
+| --- | --- |
+| `CWS_WIF_PROVIDER` | 完整 WIF 提供方资源名，形如 `projects/<编号>/locations/global/workloadIdentityPools/<池>/providers/<提供方>` |
+| `CWS_SERVICE_ACCOUNT` | 已加入 Chrome 网上应用店发布者账号的服务账号邮箱 |
+| `CWS_EXTENSION_ID` | 商店条目 ID（32 位小写字母 a–p） |
+| `CWS_PUBLISHER_ID` | 商店发布者 ID |
+
+`CWS_WIF_PROVIDER` 按原样保存，脚本只有格式校验，不做任何“修正”。当前提供方 ID 以 `providers/-github` 结尾，开头的横线是真实值的一部分，删掉或改写会导致认证失败。
+
+Google 侧目前只允许 `shixiaogaoya/MicrosoftRewardsWebsite` 仓库的 `master` 分支通过 WIF 认证，因此工作流只能从 `master` 手动运行（`workflow_dispatch`）。脚本会用 `GITHUB_EVENT_NAME` 和 `GITHUB_REF` 先做校验，不满足时直接失败。所需的 GitHub 权限只有 `contents: read` 和 `id-token: write`。
+
+运行方式与两种模式：
+
+| 模式 | `release_tag` | 行为 |
+| --- | --- | --- |
+| `check`（默认） | 忽略 | 校验配置、获取令牌、调用 V2 `fetchStatus`，在运行摘要里显示扩展 ID、已发布版本和当前审核状态。**不上传、不提审、不改变商店状态**，也不要求对应 Release 存在。 |
+| `submit` | 必填（如 `v3.1.3`） | 从指定 Release 下载 Chrome ZIP → 校验 Release、ZIP 与根目录 `manifest.json` 版本 → 查询状态 → 上传 → 确认上传成功 → 提交审核。 |
+
+`submit` 的保护措施：
+
+- `release_tag` 必须是正式版本标签，不接受预发布标签；Release 必须存在、非草稿、非预发布。
+- ZIP 必须恰好一个 `*-chrome.zip`，根目录有可解析的 `manifest.json`，`manifest_version` 为 3，且版本与标签一致（标签 `v3.1.3` 对应版本 `3.1.3`）。
+- 商店已有同一版本在审核、已有其他版本处于 STAGED、已发布同一版本、条目被下架，或仍有上传在处理中时，直接失败，不覆盖、不重复提交。只有同版本已处于 STAGED 时跳过上传，直接提审。
+- 上传返回 `IN_PROGRESS` 时只在限定次数与间隔内轮询 `fetchStatus`，确认 `SUCCEEDED` 后才提审；超时或失败一律不提审。
+- 提审请求体固定为 `{"publishType":"STAGED_PUBLISH","skipReview":false,"blockOnWarnings":true}`。
+
+商店相关运行通过 concurrency 串行执行，且 `cancel-in-progress: false`：已经发出的上传或提审不会被新运行取消。`submit` 成功后 CI 即结束，**不等待人工审核**；审核通过后还需要在开发者后台手动点击上线。读取状态和提交审核是两件不同的事，运行成功只代表请求已被商店接受，不代表扩展已经上线。
+
+本地验证只覆盖脚本逻辑：`.github/scripts/publish-cws.test.sh` 用桩替换 `curl` 和 `gh`，不访问任何网络端点，也不读写真实商店状态。真实 WIF 认证、`fetchStatus` 返回内容、上传与提审结果都尚未在 GitHub Actions 上实际运行验证。
 
 ## 反馈与许可
 

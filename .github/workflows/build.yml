@@ -1,7 +1,13 @@
-name: 在线构建扩展
+name: 在线构建扩展（可能创建 Release）
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: 对 master 当前版本执行检查和打包；若对应正式 Release 尚不存在，将创建标签和 Release
+        type: boolean
+        required: true
+        default: false
   push:
     branches: [master]
     tags: ['v*']
@@ -26,6 +32,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -45,30 +53,33 @@ jobs:
   release:
     name: 发布到 Releases
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/master' ||
+      startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: write
+    concurrency:
+      # One publisher at a time. The version is only known after checkout, and
+      # cancelling an in-flight publish could leave a tag without its Release.
+      group: rewards-release-${{ github.repository }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
+      BUILD_SHA: ${{ github.sha }}
+      CONFIRM_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_release == true }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
+          fetch-depth: 1
 
       - name: 下载本次构建的扩展 ZIP
         run: gh run download "$GITHUB_RUN_ID" --pattern 'extension-*' --dir artifacts
 
       - name: 创建版本并上传扩展 ZIP
         shell: bash
-        run: |
-          release_args=(--verify-tag --title "Rewards 助手 $GITHUB_REF_NAME" --notes-from-tag)
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            release_args+=(--prerelease --latest=false)
-          fi
-          gh release create "$GITHUB_REF_NAME" \
-            artifacts/extension-chrome/*-chrome.zip \
-            artifacts/extension-firefox/*-firefox.zip \
-            "${release_args[@]}"
+        run: bash .github/scripts/publish-release.sh
