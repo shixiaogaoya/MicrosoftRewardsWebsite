@@ -14,6 +14,7 @@ import SearchPresetSelect from '@/entrypoints/components/SearchPresetSelect';
 import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
 import SearchProgressBar from '@/entrypoints/components/SearchProgressBar';
 import TaskResultsList from '@/entrypoints/components/TaskResults';
+import Icon from '@/entrypoints/components/Icon';
 import { combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
 
 // The fork's own Chinese README, not the upstream one: the behaviour documented
@@ -143,7 +144,7 @@ function App() {
         };
     }, [isRunning]);
 
-    // Nothing has run yet: a 0/N ring would read as stalled, so it stays hidden.
+    // Nothing has run yet: 0/N would read as stalled, so progress stays hidden.
     const hasSearchToShow = isLoaded && (isSearching || completed > 0);
     const hasResults = isLoaded && (results.search || results.daily || results.claim);
     // "开始任务" needs at least one task selected. Auto-run is a separate switch:
@@ -170,9 +171,7 @@ function App() {
             <main className="popup">
                 <header className="settings-header">
                     <button type="button" className="back-button" onClick={() => setShowSettings(false)} aria-label="返回">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M15 6l-6 6 6 6" />
-                        </svg>
+                        <Icon name="arrow-left" size="medium" />
                     </button>
                     <h1 className="settings-heading">设置</h1>
                 </header>
@@ -257,7 +256,7 @@ function App() {
 
                 <a className="ghost-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" id="settingsHelpLink">
                     使用说明
-                    <ExternalIcon />
+                    <Icon name="external-link" />
                 </a>
             </main>
         );
@@ -266,18 +265,9 @@ function App() {
     return (
         <main className="popup">
             <header className="header">
-                <div className="brand">
-                    <span className="brand-mark" aria-hidden="true">
-                        <img src="/imgs/rewards-r.svg" width="30" height="30" alt="" />
-                    </span>
-                    <h1 className="heading">Rewards 助手</h1>
-                </div>
+                <h1 className="heading">Rewards 助手</h1>
                 <a className="help-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" aria-label="帮助" id="helpLink">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <circle cx="12" cy="12" r="9" />
-                        <path d="M9.6 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.7" />
-                        <path d="M12 17h.01" />
-                    </svg>
+                    <Icon name="circle-help" size="medium" />
                 </a>
             </header>
 
@@ -285,7 +275,6 @@ function App() {
                 <h2 id="status-heading" className="visually-hidden">运行状态</h2>
                 <div className="status-head">
                     <span className={`status-pill status-pill--${status.tone}`} role="status">
-                        <span className="status-dot" aria-hidden="true" />
                         {status.text}
                     </span>
                 </div>
@@ -341,16 +330,14 @@ function App() {
                         <span className="advanced-title">高级设置</span>
                         <span className="advanced-sub">{nextRoundSummary({ search: active, daily: autoDaily, claim: claimPoints, searches, timeout })}</span>
                     </span>
-                    <svg className="advanced-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <path d="M9 6l6 6-6 6" />
-                    </svg>
+                    <Icon name="chevron-right" />
                 </button>
             </section>
 
             <SaveNote state={saveState} onRetry={() => retryFailed(bindings)} />
             <a className="ghost-button" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">
                 打开 Rewards
-                <ExternalIcon />
+                <Icon name="external-link" />
             </a>
         </main>
     );
@@ -432,20 +419,10 @@ function TaskTile({ id, label, checked, onChange }: TaskTileProps) {
                 onChange={(e) => onChange(e.target.checked)}
             />
             <span className="tile-box" aria-hidden="true">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 12.5l4.5 4.5L19 7.5" />
-                </svg>
+                <Icon name="check" />
             </span>
             {label}
         </label>
-    );
-}
-
-function ExternalIcon() {
-    return (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-        </svg>
     );
 }
 

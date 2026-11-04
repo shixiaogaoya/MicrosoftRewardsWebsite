@@ -1,5 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
+import Icon from './Icon';
 
 const LABELS: Record<TaskKind, string> = {
     search: '搜索',
@@ -56,20 +57,17 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
     const tone = TONE[result.status];
     return (
         <li className="task-item">
-            <div className="task-rail" aria-hidden="true">
-                <span className={`task-dot task-dot--${tone}`}>
-                    <DotIcon tone={tone} />
-                </span>
-                <span className="task-line" />
-            </div>
+            <span className={`task-indicator task-indicator--${result.status === 'failed' ? 'error' : tone}`} aria-hidden="true">
+                <Icon name={tone === 'done' ? 'check' : tone === 'attention' ? 'circle-help' : tone === 'busy' ? 'clock' : 'circle'} />
+            </span>
             <div className="task-body">
                 <div className="task-row">
                     <span className="task-name">{LABELS[kind]}</span>
                     <span className="task-actions">
-                        <span className={`task-status task-status--${tone}`}>{STATUS_TEXT[result.status]}</span>
+                        <span className={`task-status task-status--${result.status === 'failed' ? 'error' : tone}`}>{STATUS_TEXT[result.status]}</span>
                         {canRetry && (
                             <button type="button" className="task-retry" onClick={() => retry(kind)} aria-label={`重试${LABELS[kind]}`}>
-                                <RetryIcon />
+                                <Icon name="rotate-ccw" />
                             </button>
                         )}
                     </span>
@@ -77,40 +75,6 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
                 {result.reason && <p className="task-reason">{result.reason}</p>}
             </div>
         </li>
-    );
-}
-
-function DotIcon({ tone }: { tone: Tone }) {
-    if (tone === 'done') {
-        return (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M5 12.5l4.5 4.5L19 7.5" />
-            </svg>
-        );
-    }
-    if (tone === 'attention') {
-        return (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                <path d="M12 6.5v7M12 17.5h.01" />
-            </svg>
-        );
-    }
-    if (tone === 'busy') {
-        return (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
-                <path d="M12 3a9 9 0 0 1 9 9" />
-            </svg>
-        );
-    }
-    return <span style={{ width: '0.5rem', height: '0.5rem', borderRadius: '999px', background: '#94a3b0' }} />;
-}
-
-function RetryIcon() {
-    return (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M20 11a8 8 0 1 0-2.3 5.7" />
-            <path d="M20 4.5V11h-6.5" />
-        </svg>
     );
 }
 
