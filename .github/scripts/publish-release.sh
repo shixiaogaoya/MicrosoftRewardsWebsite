@@ -8,6 +8,9 @@
 # prerelease. Nothing here moves an existing tag or replaces a Release.
 set -euo pipefail
 
+# Only a newly published stable Release on master can trigger store submission.
+printf 'store_release_tag=\n' >> "$GITHUB_OUTPUT"
+
 summary() {
   {
     echo "### Release"
@@ -101,26 +104,6 @@ resolve_tag_commit() {
   fi
 }
 
-api_status "repos/${GH_REPO}/git/ref/tags/${release_tag}"
-tag_status="$API_STATUS"
-tag_action="未创建"
-case "$tag_status" in
-  200)
-    tag_commit="$(resolve_tag_commit "$release_tag")"
-    [[ "$tag_commit" == "$BUILD_SHA" ]] || fail "标签 $release_tag 指向 $tag_commit，与本次构建 $BUILD_SHA 不一致，不会移动或覆盖"
-    tag_action="未创建（复用已指向 ${BUILD_SHA} 的 ${release_tag}）"
-    ;;
-  404)
-    if [[ "$prerelease" == "1" ]]; then
-      fail "预发布标签 $release_tag 在远端不存在，不会从当前提交另建标签"
-    fi
-    tag_action="将创建 ${release_tag}"
-    ;;
-  *)
-    fail "查询标签 $release_tag 返回 HTTP $tag_status，不能继续发布"
-    ;;
-esac
-
 release_state() {
   api_status "repos/${GH_REPO}/releases/tags/${release_tag}"
   case "$API_STATUS" in
@@ -148,6 +131,26 @@ skip_existing() {
 release_state
 [[ "$RELEASE_STATE" == "exists" ]] && skip_existing "${release_tag} 的 Release 已存在，保留本次 CI 与 Artifacts，不重复创建或覆盖"
 
+api_status "repos/${GH_REPO}/git/ref/tags/${release_tag}"
+tag_status="$API_STATUS"
+tag_action="未创建"
+case "$tag_status" in
+  200)
+    tag_commit="$(resolve_tag_commit "$release_tag")"
+    [[ "$tag_commit" == "$BUILD_SHA" ]] || fail "标签 $release_tag 指向 $tag_commit，与本次构建 $BUILD_SHA 不一致，不会移动或覆盖"
+    tag_action="未创建（复用已指向 ${BUILD_SHA} 的 ${release_tag}）"
+    ;;
+  404)
+    if [[ "$prerelease" == "1" ]]; then
+      fail "预发布标签 $release_tag 在远端不存在，不会从当前提交另建标签"
+    fi
+    tag_action="将创建 ${release_tag}"
+    ;;
+  *)
+    fail "查询标签 $release_tag 返回 HTTP $tag_status，不能继续发布"
+    ;;
+esac
+
 # A release for the same version may have been created while this run waited.
 release_state
 [[ "$RELEASE_STATE" == "exists" ]] && skip_existing "发布前再次检查时 ${release_tag} 已存在，本次不重复创建或覆盖"
@@ -164,7 +167,7 @@ Rewards 助手 ${package_version}
 - Firefox：下载文件名含 firefox 的 ZIP，按 README 临时载入或安装。
 - GitHub 自动附带的 Source code 归档是源码，请使用上面两份扩展 ZIP。
 
-此 Release 只发布到 GitHub，不代表已发布到 Chrome 网上应用店。使用前请查看仓库 README 的已知问题与验证范围。
+master 发布流程会在新建正式 Release 后上传 Chrome ZIP 并提交商店审核；审核通过后仍需手动上线。创建 Release 不代表扩展已经在商店上线。使用前请查看仓库 README 的已知问题与验证范围。
 EOF
   # An annotated tag records a tagger, and the runner has no git identity.
   # Pass one explicitly instead of relying on repository or global config.
@@ -179,6 +182,10 @@ EOF
   pushed_commit="$(resolve_tag_commit "$release_tag")"
   [[ "$pushed_commit" == "$BUILD_SHA" ]] || fail "远端标签 $release_tag 指向 $pushed_commit，不是本次构建 $BUILD_SHA"
   created_tag="是（${release_tag} → ${BUILD_SHA}）"
+else
+  # Shallow checkout does not include existing tags. --notes-from-tag needs
+  # the exact tag locally when retrying after a tag was already pushed.
+  git fetch --no-tags origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
 fi
 
 # Creating the tag can itself start another run. Look once more before
@@ -204,3 +211,6 @@ summary \
   "- Release：${release_url}" \
   "- 跳过原因：无"
 echo "Published $release_url"
+if [[ "$prerelease" == "0" && "${GITHUB_REF:-}" == "refs/heads/master" ]]; then
+  printf 'store_release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+fi

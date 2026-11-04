@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_release:
-        description: 对 master 当前版本执行检查和打包；若对应正式 Release 尚不存在，将创建标签和 Release
+        description: 对 master 当前版本检查和打包；若正式 Release 尚不存在，将创建标签和 Release，并提交 Chrome 商店审核
         type: boolean
         required: true
         default: false
@@ -53,6 +53,8 @@ jobs:
   release:
     name: 发布到 Releases
     needs: build
+    outputs:
+      store_release_tag: ${{ steps.publish.outputs.store_release_tag }}
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/master' ||
@@ -81,5 +83,18 @@ jobs:
         run: gh run download "$GITHUB_RUN_ID" --pattern 'extension-*' --dir artifacts
 
       - name: 创建版本并上传扩展 ZIP
+        id: publish
         shell: bash
         run: bash .github/scripts/publish-release.sh
+
+  store:
+    name: 提交 Chrome 商店审核
+    needs: release
+    if: github.ref == 'refs/heads/master' && needs.release.outputs.store_release_tag != ''
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-cws.yml
+    with:
+      mode: submit
+      release_tag: ${{ needs.release.outputs.store_release_tag }}

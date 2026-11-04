@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Chrome Web Store V2 helper for the manually triggered store workflow.
+# Chrome Web Store V2 helper for manual runs and the build workflow's store job.
 #
 #   publish-cws.sh preflight  validate the run context and repository variables
 #   publish-cws.sh check      read fetchStatus only; never uploads or publishes
@@ -46,10 +46,12 @@ preflight() {
   local mode="${MODE:-}"
   local command="${1:-}"
 
-  [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]] || fail "工作流只能手动运行（workflow_dispatch）"
+  # Reusable workflows inherit the caller's event, including master pushes.
+  [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" || "${GITHUB_EVENT_NAME:-}" == "push" ]] \
+    || fail "工作流只接受 master 推送或手动运行（push / workflow_dispatch）"
   # The Google-side WIF binding only accepts this branch, so fail early rather
   # than presenting a confusing authentication error.
-  [[ "${GITHUB_REF:-}" == "refs/heads/master" ]] || fail "必须从 master 分支手动运行；当前 ref 为 ${GITHUB_REF:-<empty>}"
+  [[ "${GITHUB_REF:-}" == "refs/heads/master" ]] || fail "必须从 master 分支运行；当前 ref 为 ${GITHUB_REF:-<empty>}"
 
   [[ "$mode" == "check" || "$mode" == "submit" ]] || fail "工作流输入 mode 必须是 check 或 submit，实际为：${mode:-<empty>}"
   if [[ -n "$command" && "$command" != "preflight" && "$mode" != "$command" ]]; then

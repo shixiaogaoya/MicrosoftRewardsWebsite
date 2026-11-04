@@ -452,6 +452,24 @@ expect_ok "no-token-in-output"
 ! grep -rq "$CWS_ACCESS_TOKEN" "$work/case" --exclude=curl.log --exclude-dir=curl 2>/dev/null || { echo "FAIL token found in case files"; exit 1; }
 echo "PASS no-token-stored-in-output"
 
+# 29. A reusable workflow inherits push from its master caller.
+reset_case
+GITHUB_EVENT_NAME=push MODE=submit RELEASE_TAG=v3.1.3 run submit
+expect_ok "master-push-submit"
+[[ -f "$work/case/uploaded.zip" && -f "$work/case/publish-request.json" ]] || { echo "FAIL master push did not upload and submit"; exit 1; }
+echo "PASS master-push-upload-and-submit"
+
+# 30. Pull requests and tag pushes cannot reach the store.
+reset_case
+GITHUB_EVENT_NAME=pull_request MODE=check run check
+expect_fail "reject-pull-request" "push / workflow_dispatch"
+[[ ! -s "$work/case/curl.log" && ! -s "$work/case/gh.log" ]] || { echo "FAIL pull request contacted external API"; exit 1; }
+
+reset_case
+GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v3.1.3 MODE=submit RELEASE_TAG=v3.1.3 run submit
+expect_fail "reject-tag-push" "master"
+[[ ! -s "$work/case/curl.log" && ! -s "$work/case/gh.log" ]] || { echo "FAIL tag push contacted external API"; exit 1; }
+
 echo "ALL LOCAL CWS SCENARIOS PASSED"
 echo "--- successful submit summary ---"
 reset_case
