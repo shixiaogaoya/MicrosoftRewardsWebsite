@@ -1,7 +1,7 @@
 import './App.css';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
-import { useStorage, type SaveState } from '@/entrypoints/hooks/useStorage';
+import { useStorage, type LoadState, type SaveState } from '@/entrypoints/hooks/useStorage';
 import { useSearchProgress } from '@/entrypoints/hooks/useSearchProgress';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { DEFAULTS, SETTING_LIMITS, clampSetting } from '@/entrypoints/utils/settings';
@@ -15,7 +15,7 @@ import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
 import SearchProgressBar from '@/entrypoints/components/SearchProgressBar';
 import TaskResultsList from '@/entrypoints/components/TaskResults';
 import Icon from '@/entrypoints/components/Icon';
-import { combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
+import { combinedLoad, combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
 
 // The fork's own Chinese README, not the upstream one: the behaviour documented
 // there (stopping a round, the auto-run switch, 已发起 versus 到账) is this fork's.
@@ -160,6 +160,12 @@ function App() {
     const handlingCount = countNeedsHandling(results);
     const bindings = [activeStore, autoDailyStore, searchesStore, timeoutStore, closeTimeStore, openFirstStore, claimStore, autoRunStore];
     const saveState = combinedSave(bindings.map((binding) => binding.saveState));
+    const loadState = combinedLoad(bindings.map((binding) => binding.loadState));
+    // Starting a round uses the values on screen, so it waits until every
+    // setting has been read and its latest edit is stored: a value still being
+    // read, or one whose write has not gone through, is not a value a round may
+    // run on. Stopping is not gated here — it sends no values.
+    const settingsNotReady = loadState !== 'loaded' || saveState === 'saving' || saveState === 'error';
     const settingsDirtyWhileRunning = isRunning && frozenConfig != null && (
         frozenConfig.searches !== searches || frozenConfig.timeout !== timeout || frozenConfig.closeTime !== closeTime
     );
@@ -252,6 +258,7 @@ function App() {
                 {settingsDirtyWhileRunning && (
                     <p className="field-note" role="status">设置将用于下一轮任务。</p>
                 )}
+                <LoadNote state={loadState} onRetry={() => retryFailedLoads(bindings)} />
                 <SaveNote state={saveState} onRetry={() => retryFailed(bindings)} />
 
                 <a className="ghost-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" id="settingsHelpLink">
@@ -293,7 +300,7 @@ function App() {
                     isRunning={isRunning}
                     isStopping={isStopping}
                     canStart={hasTaskSelected}
-                    disabled={!isLoaded || isStopping}
+                    disabled={!isLoaded || isStopping || settingsNotReady}
                     onStop={() => setStopRequested(true)}
                 />
                 {!hasTaskSelected && !isRunning && (
@@ -334,6 +341,7 @@ function App() {
                 </button>
             </section>
 
+            <LoadNote state={loadState} onRetry={() => retryFailedLoads(bindings)} />
             <SaveNote state={saveState} onRetry={() => retryFailed(bindings)} />
             <a className="ghost-button" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">
                 打开 Rewards
@@ -359,6 +367,24 @@ function retryFailed(bindings: { saveState: SaveState; retrySave: () => void }[]
     for (const binding of bindings) {
         if (binding.saveState === 'error') binding.retrySave();
     }
+}
+
+function retryFailedLoads(bindings: { loadState: LoadState; retryLoad: () => void }[]): void {
+    for (const binding of bindings) {
+        if (binding.loadState === 'error') binding.retryLoad();
+    }
+}
+
+// A failed read leaves the defaults on screen, so the failure carries its own
+// retry — on both views, next to the save note.
+function LoadNote({ state, onRetry }: { state: LoadState; onRetry: () => void }) {
+    if (state !== 'error') return null;
+    return (
+        <p className="save-note save-note--error" role="status">
+            设置读取失败
+            <button type="button" className="save-retry" onClick={onRetry}>重新读取</button>
+        </p>
+    );
 }
 
 function SaveNote({ state, onRetry }: { state: SaveState; onRetry: () => void }) {

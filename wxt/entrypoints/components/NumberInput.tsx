@@ -56,6 +56,12 @@ function NumberInput({ id, label, kind, value, hint, unit, onChange }: NumberInp
                         if (next != null && next !== value) onChange(next);
                     }}
                     onBlur={() => commit(draft)}
+                    onKeyDown={(event) => {
+                        // Enter confirms the draft the way blur does, so an
+                        // invalid one is replaced right away instead of sitting
+                        // on the field.
+                        if (event.key === 'Enter') commit(draft);
+                    }}
                 />
                 <span className="input-unit" aria-hidden="true">{unit}</span>
             </div>

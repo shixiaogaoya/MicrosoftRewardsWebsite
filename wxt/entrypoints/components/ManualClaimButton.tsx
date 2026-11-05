@@ -14,8 +14,13 @@ interface ManualClaimButtonProps {
 // does not disable it: that switch only stops the alarm and startup from
 // starting a round on their own.
 function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }: ManualClaimButtonProps) {
+    // The disabled prop carries the settings' read/save state, which only
+    // matters for starting: starting runs on the values on screen. Stopping
+    // sends no values, so a running round keeps the button available unless its
+    // stop request is already in flight.
+    const blocked = isRunning ? isStopping : disabled || !canStart;
     function handleClick() {
-        if (disabled || (!isRunning && !canStart)) return;
+        if (blocked) return;
         if (isRunning) onStop();
         browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' });
     }
@@ -26,8 +31,8 @@ function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }
             id="button"
             className="btn action-button"
             onClick={handleClick}
-            disabled={disabled || (!isRunning && !canStart)}
-            aria-disabled={disabled || (!isRunning && !canStart)}
+            disabled={blocked}
+            aria-disabled={blocked}
         >
             <Icon name={isRunning ? 'square' : 'play'} />
             {label}

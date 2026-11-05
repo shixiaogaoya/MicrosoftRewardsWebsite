@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskResult, TaskResults } from '@/entrypoints/utils/runState';
-import { combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
+import { combinedLoad, combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
 
 function result(status: TaskResult['status']): TaskResult {
     return { status };
@@ -63,6 +63,16 @@ describe('combinedSave', () => {
         expect(combinedSave(['saved', 'saved'])).toBe('saved');
         expect(combinedSave(['saved', 'error'])).toBe('error');
         expect(combinedSave(['idle', 'idle'])).toBe('idle');
+    });
+});
+
+describe('combinedLoad', () => {
+    it('shows a failure before an in-flight read, and loaded only when all reads finish', () => {
+        expect(combinedLoad(['loaded', 'loading'])).toBe('loading');
+        expect(combinedLoad(['loading', 'loaded'])).toBe('loading');
+        expect(combinedLoad(['loaded', 'error'])).toBe('error');
+        expect(combinedLoad(['error', 'loading'])).toBe('error');
+        expect(combinedLoad(['loaded', 'loaded'])).toBe('loaded');
     });
 });
 
