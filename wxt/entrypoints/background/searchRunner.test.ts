@@ -3,8 +3,8 @@
 // that WXT's `#imports` transform triggers (same reason as useStorage.test.ts).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { handleAlarmStep, startSearches, stopSearches } from './searchRunner';
-import { beginRun, endRun, requestStop } from './taskRun';
+import { handleAlarmStep, mayOpenFirstResult, startSearches, stopSearches } from './searchRunner';
+import { beginRun, endRun, noteSearchTab, requestStop } from './taskRun';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { PROGRESS_KEY, RESULTS_KEY, RUN_KEY, type RunProgress, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
@@ -307,6 +307,68 @@ describe('searchRunner', () => {
       const tracked = await getStorageItem<Record<string, number>>('trackedTabs', StorageValues.LOCAL);
       expect(Object.keys(tracked ?? {})).toHaveLength(1);
       expect(await fakeBrowser.alarms.get('closeStaleTabs')).toBeDefined();
+    });
+  });
+
+  describe('mayOpenFirstResult', () => {
+    // The bing-result content script asks this before leaving the results page;
+    // the opened tab is named in the run record when "Open first result" adds
+    // the marker, so the check below has something to match against.
+    it('names the marked tab in the run record when opening it', async () => {
+      await seed({ openFirstResult: true });
+
+      const runId = await startRound();
+      await startSearches(runId, { searches: 5, timeout: 60, closeTime: 5 });
+
+      const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
+      expect(state?.searchTabIds).toHaveLength(1);
+    });
+
+    it('allows a tab this round opened while the setting is on', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      await noteSearchTab(runId, 7);
+
+      await expect(mayOpenFirstResult(7)).resolves.toBe(true);
+    });
+
+    // Regression: the content script navigated on the ?marAuto marker alone, so
+    // any Bing page carrying it — a bookmark, a copied link, a tab left over
+    // from an earlier round — left the results page. Only a tab this round
+    // opened may ask, and only the tab's own page can ask.
+    it('refuses a tab this round did not open', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      await noteSearchTab(runId, 7);
+
+      await expect(mayOpenFirstResult(99)).resolves.toBe(false);
+      await expect(mayOpenFirstResult(undefined)).resolves.toBe(false);
+    });
+
+    it('refuses once the round is stopping', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      await noteSearchTab(runId, 7);
+      await requestStop();
+
+      await expect(mayOpenFirstResult(7)).resolves.toBe(false);
+    });
+
+    it('refuses when no round is running', async () => {
+      await seed({ openFirstResult: true });
+
+      await expect(mayOpenFirstResult(7)).resolves.toBe(false);
+    });
+
+    // The setting is re-read at the moment of the ask, so turning it off while
+    // a marked tab sits on the results page stops the navigation too.
+    it('refuses after the setting was turned off', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      await noteSearchTab(runId, 7);
+      await setStorageItem('openFirstResult', false, StorageValues.SYNC);
+
+      await expect(mayOpenFirstResult(7)).resolves.toBe(false);
     });
   });
 });

@@ -11,7 +11,7 @@ import {
     watchDailyFeatureToggles,
 } from './background/dailySchedule';
 import { migrateRunState } from './background/stateMigration';
-import { handleAlarmStep, watchSearchesToggle } from './background/searchRunner';
+import { handleAlarmStep, mayOpenFirstResult, watchSearchesToggle } from './background/searchRunner';
 import { isCleanupAlarm, sweepStaleTabs } from './background/tabCleanup';
 import type { TaskKind } from './background/taskRun';
 
@@ -33,12 +33,19 @@ export default defineBackground(() => {
     // Migration is idempotent and opens nothing; a wake that is the first one
     // after an update has to run it before the alarm is armed.
     void migrateRunState().then(() => scheduleDailyCheckAlarm());
-    browser.runtime.onMessage.addListener((request: { action?: string; only?: unknown }) => {
+    browser.runtime.onMessage.addListener((request: { action?: string; only?: unknown }, sender: { tab?: { id?: number } }, sendResponse: (response?: unknown) => void) => {
         // The button is a manual start: it may re-run a task already attempted
         // today. `only` limits that to the tasks the button named, so a retry of
         // one failure does not restart the others.
         if (request.action === 'popup') void runRewards({ manual: true, only: requestedTasks(request.only) });
         else if (request.action === 'stop') void stopRewards();
+        else if (request.action === 'bingFirstResult') {
+            // The bing-result content script asks this before leaving the
+            // results page, and awaits the reply. Returning true keeps the
+            // channel open for it; the actions above answer nothing.
+            void mayOpenFirstResult(sender.tab?.id).then((allowed) => sendResponse({ allowed }));
+            return true;
+        }
     });
     // Registered here, at the worker's top level, so the browser wakes a
     // torn-down service worker for it — the only kind of timer that survives.

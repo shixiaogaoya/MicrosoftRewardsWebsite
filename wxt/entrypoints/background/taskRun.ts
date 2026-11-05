@@ -243,6 +243,19 @@ export function noteSearchDeadline(runId: number, deadline: number): Promise<voi
     });
 }
 
+// The search half's own tab list, the mirror of the dashboard's single tab
+// above. Only a tab named here is later allowed to leave the results page, so
+// a page that merely carries the ?marAuto marker cannot ask its way into a
+// navigation.
+export function noteSearchTab(runId: number, tabId: number): Promise<void> {
+    return enqueue(async () => {
+        const state = await read();
+        if (!state || state.id !== runId) return;
+        if (state.searchTabIds?.includes(tabId)) return;
+        await write({ ...state, searchTabIds: [...(state.searchTabIds ?? []), tabId] });
+    });
+}
+
 export async function readConfig(): Promise<RunConfig | null> {
     return await getStorageItem<RunConfig>(CONFIG_KEY, StorageValues.LOCAL);
 }

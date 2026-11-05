@@ -7,7 +7,7 @@ import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { clearBadge, setSearchCountBadge } from '@/entrypoints/utils/browserAction';
 import type { RunConfig } from '@/entrypoints/utils/runState';
 import { trackTab, untrackTab } from './tabCleanup';
-import { claimStep, currentRun, endRun, noteSearchDeadline, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
+import { claimStep, currentRun, endRun, noteSearchDeadline, noteSearchTab, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
 
 const ALARM_NAME = 'openTabAlarm';
 // A search tab closes `closeTime` after it finishes loading, so the durable
@@ -252,7 +252,25 @@ async function openSearchTab(runId: number, closeTimeMs: number): Promise<number
     const openFirstResult = await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC);
     const query = buildSearchUrl(buildSearchQuery());
     const url = openFirstResult ? `${query}&marAuto=1` : query;
-    return await openAndClose(runId, url, closeTimeMs + getRndInteger(0, 1000));
+    const tabId = await openAndClose(runId, url, closeTimeMs + getRndInteger(0, 1000));
+    // The tab the marker was added to is the only one that will later ask to
+    // leave the results page; naming it here is what lets the background say no
+    // to every other page that carries ?marAuto.
+    if (openFirstResult && tabId != null) await noteSearchTab(runId, tabId);
+    return tabId;
+}
+
+// Asked through the background's message listener by the bing-result content
+// script before that tab leaves the results page. Three things must hold at
+// that moment: the asking tab is one this round opened (the ?marAuto marker is
+// a hint, not permission), the round is still running its search half (a stop,
+// a finished round or a replaced one says no), and the setting is still on (it
+// may have been turned off while the tab sat on the results page).
+export async function mayOpenFirstResult(tabId: number | undefined): Promise<boolean> {
+    if (tabId == null) return false;
+    if ((await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC)) !== true) return false;
+    const run = await currentRun();
+    return run?.phase === 'running' && run.search === true && (run.searchTabIds?.includes(tabId) ?? false);
 }
 
 async function openAndClose(runId: number, url: string, closeTimeMs: number): Promise<number | null> {

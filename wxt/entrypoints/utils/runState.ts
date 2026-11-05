@@ -41,6 +41,12 @@ export interface TaskRunState {
     // opening a tab and arming the next step would never be settled and would
     // block every later start.
     searchDeadline?: number;
+    // The search tabs this round opened, recorded as each is created. The
+    // bing-result content script asks before navigating to the first organic
+    // result; only a tab named here counts as this round's own, so a page that
+    // merely carries the ?marAuto marker (a bookmark, a copied link, a leftover
+    // tab from an earlier round) is refused.
+    searchTabIds?: number[];
 }
 
 // Frozen when the round starts. Editing the search count, the gap or the close
