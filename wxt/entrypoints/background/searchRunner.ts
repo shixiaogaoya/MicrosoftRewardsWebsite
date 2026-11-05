@@ -91,26 +91,35 @@ export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
 // the 30s backstop alarm both arrive here; whichever lands second sees the step
 // already taken and returns. A callback whose round was stopped or replaced fails
 // the same check, so it cannot open a tab or rewrite the new round's count.
+//
+// A step that fails outright — the tab open, a storage write, arming the next
+// alarm — is settled on its own round through the same end step as every other
+// ending. Letting the rejection escape to the alarm caller left the result
+// `running` and the record blocking every later start.
 async function runSearchStep(runId: number, step: number, config: RunConfig): Promise<void> {
     if (!(await claimStep(runId, step, 'search'))) return;
-    await openSearchTab(runId, config.closeTime * 1000);
-    // Stop can land while the tab is being created. The tab itself cannot be
-    // uncreated, but it is already registered for cleanup; this step must not
-    // put the round back into "running" or arm another one.
-    if (!(await stillRunning(runId))) {
-        clearBadge();
-        return;
-    }
-    // A failed write means the round ended between the check above and the
-    // queued write, so this step is no longer current: no further scheduling.
-    if (!(await recordProgress(runId, step, config.searches))) {
-        clearBadge();
-        return;
-    }
-    if (shouldOpenMore(step, config.searches)) {
-        scheduleNextStep(runId, step + 1, config.timeout);
-    } else {
-        await finishSearch(runId, { status: 'completed' });
+    try {
+        await openSearchTab(runId, config.closeTime * 1000);
+        // Stop can land while the tab is being created. The tab itself cannot be
+        // uncreated, but it is already registered for cleanup; this step must not
+        // put the round back into "running" or arm another one.
+        if (!(await stillRunning(runId))) {
+            clearBadge();
+            return;
+        }
+        // A failed write means the round ended between the check above and the
+        // queued write, so this step is no longer current: no further scheduling.
+        if (!(await recordProgress(runId, step, config.searches))) {
+            clearBadge();
+            return;
+        }
+        if (shouldOpenMore(step, config.searches)) {
+            await scheduleNextStep(runId, step + 1, config.timeout);
+        } else {
+            await finishSearch(runId, { status: 'completed' });
+        }
+    } catch (error) {
+        await finishSearch(runId, { status: 'failed', reason: reasonOf(error) });
     }
 }
 
@@ -132,15 +141,20 @@ async function stillRunning(runId: number): Promise<boolean> {
 // creating an alarm replaces the pending one, so a step never runs twice.
 let shortStepTimer: ReturnType<typeof setTimeout> | undefined;
 
-function scheduleNextStep(runId: number, step: number, searchTimeout: number): void {
+async function scheduleNextStep(runId: number, step: number, searchTimeout: number): Promise<void> {
     const delayMs = nextDelayMs(searchTimeout);
     const name = searchAlarmName(runId, step);
-    browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    // Both writes below are awaited. The alarm is the durable trigger for the
+    // next step and the deadline is what the sweep judges the round by, so a
+    // create or a note that never settled must fail this step — which ends the
+    // round — instead of leaving a deadline recorded for a wake-up that was
+    // never armed.
+    await browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
     // Search has no page the sweep can judge it by, even when the dashboard is
     // still open. Recording when the next step is due lets a sweep after a
     // worker restart tell "waiting" from "abandoned", instead of leaving the
     // record to block every later start.
-    void noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
+    await noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
     clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
         shortStepTimer = setTimeout(() => {
@@ -174,10 +188,20 @@ export async function stopSearches(): Promise<void> {
     );
 }
 
-async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed'; reason?: string }): Promise<void> {
+// The single end step for this round's search half. Every ending — the first
+// step, a later step, a toggle-off, a failed step and the stale sweep — settles
+// through here, so the result, the search flag, the badge and this round's
+// alarms are always updated together: no path can end the round and leave one
+// of them behind. The result is written behind the runId guard, so a callback
+// from an old round records nothing on whatever round is current now.
+export async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed' | 'unconfirmed'; reason?: string }): Promise<void> {
     await recordResult(runId, 'search', result);
     await stopSearches();
     await endRun(runId, 'search');
+}
+
+function reasonOf(error: unknown): string {
+    return error instanceof Error && error.message ? error.message : '搜索步骤执行失败';
 }
 
 // Turning "执行搜索" off stops the search half of a round that is already in
@@ -193,10 +217,13 @@ export function watchSearchesToggle(): void {
 
 async function stopSearchOnly(): Promise<void> {
     const run = await currentRun();
-    await stopSearches();
-    if (!run?.search) return;
-    await recordResult(run.id, 'search', { status: 'cancelled', reason: '已关闭搜索' });
-    await endRun(run.id, 'search');
+    if (!run?.search) {
+        // No round holds the search half — still drop the alarms, the timer
+        // and the badge a past round may have left behind.
+        await stopSearches();
+        return;
+    }
+    await finishSearch(run.id, { status: 'cancelled', reason: '已关闭搜索' });
 }
 
 // `opened` is how many search tabs this round has started, not how many points

@@ -7,7 +7,7 @@ import { handleAlarmStep, startSearches, stopSearches } from './searchRunner';
 import { beginRun, endRun, requestStop } from './taskRun';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
-import { PROGRESS_KEY, RUN_KEY, type RunProgress, type TaskRunState } from '@/entrypoints/utils/runState';
+import { PROGRESS_KEY, RESULTS_KEY, RUN_KEY, type RunProgress, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
 
 // The alarm names the round and the step it was armed for, so a firing can be
 // attributed to exactly one step of one round. `startRound` returns the id the
@@ -101,6 +101,28 @@ describe('searchRunner', () => {
 
       expect(create).not.toHaveBeenCalled();
       expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+    });
+
+    // Regression: a later step whose tab open threw used to reject straight out
+    // of the alarm handler, leaving the result `running`, the flag up, the badge
+    // and the round's armed alarm behind. Every ending now settles through one
+    // end step, and the failure names the round it belongs to.
+    it('settles the round as failed when a later step throws', async () => {
+      vi.spyOn(fakeBrowser.tabs, 'create').mockRejectedValueOnce(new Error('tab creation failed'));
+      await seed({});
+      const runId = await startRound(1);
+      await fakeBrowser.action.setBadgeText({ text: '1' });
+      fakeBrowser.alarms.create(`openTabAlarm:${runId}:2`, { delayInMinutes: 1 });
+
+      await handleAlarmStep(stepAlarm(runId, 2));
+
+      expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
+        search: { status: 'failed', reason: 'tab creation failed' },
+      });
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+      expect(await fakeBrowser.action.getBadgeText({})).toBe('');
+      expect(await fakeBrowser.alarms.getAll()).toEqual([]);
     });
 
     it('stops instead of searching when "Daily searches" is turned off', async () => {
