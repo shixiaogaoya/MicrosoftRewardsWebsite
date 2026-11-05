@@ -10,9 +10,9 @@
 #
 # submit always verifies the Release and the ZIP root manifest first. It then
 # refuses to upload over an in-progress review, an in-flight upload, or a
-# published/staged copy of a different version. A same-version staged revision
-# is reused (the store rejects re-uploading an existing version) and only
-# published. After upload, the async state is polled for a bounded time; publish
+# staged copy of a different version. The same version already in review,
+# staged, or published is a successful no-op, so reruns never upload it again.
+# After upload, the async state is polled for a bounded time; publish
 # is only called once the store confirms the upload succeeded.
 set -euo pipefail
 
@@ -202,6 +202,18 @@ version_list_has() {
   return 1
 }
 
+skip_existing_version() {
+  local state="$1"
+  summary \
+    "- 模式：submit" \
+    "- Release：${RELEASE_TAG}" \
+    "- 结果：该版本已在商店，跳过重复上传和提审" \
+    "- 商店状态：$(item_state_label "$state")" \
+    "- 本次未上传、未提审、未改变商店状态"
+  echo "CWS submit already satisfied: ${RELEASE_TAG} -> ${state}"
+  exit 0
+}
+
 check_mode() {
   preflight check
   require_token
@@ -302,16 +314,16 @@ submit_mode() {
   [[ "$LAST_UPLOAD_STATE" == "IN_PROGRESS" ]] \
     && fail "商店仍有一个上传在处理中（lastAsyncUploadState=IN_PROGRESS），本次不会再次上传；请稍后用 check 模式确认"
 
-  local reuse_staged=0
   case "$SUBMITTED_STATE" in
     PENDING_REVIEW)
+      if version_list_has "$zip_version" "${SUBMITTED_VERSIONS[@]}"; then
+        skip_existing_version "$SUBMITTED_STATE"
+      fi
       fail "商店已有提交正在审核（版本：${SUBMITTED_VERSIONS_TEXT:-未知}），不会上传或覆盖进行中的审核"
       ;;
     STAGED)
       if version_list_has "$zip_version" "${SUBMITTED_VERSIONS[@]}"; then
-        # The store rejects re-uploading an existing version. A staged revision
-        # for this exact version is already approved, so only publish it.
-        reuse_staged=1
+        skip_existing_version "$SUBMITTED_STATE"
       else
         fail "商店已有其他版本等待上线（STAGED：${SUBMITTED_VERSIONS_TEXT:-未知}），请先在开发者后台上线或取消，不会覆盖"
       fi
@@ -320,62 +332,56 @@ submit_mode() {
   case "$PUBLISHED_STATE" in
     PUBLISHED|PUBLISHED_TO_TESTERS)
       if version_list_has "$zip_version" "${PUBLISHED_VERSIONS[@]}"; then
-        fail "版本 ${zip_version} 已由商店发布（${PUBLISHED_VERSIONS_TEXT}），不会重复提交"
+        skip_existing_version "$PUBLISHED_STATE"
       fi
       ;;
   esac
 
   local upload_result upload_version
-  if [[ "$reuse_staged" == "1" ]]; then
-    upload_result="未上传（复用同版本已通过审核的 STAGED 修订）"
-    upload_version="$zip_version"
-    echo "Reusing staged revision ${zip_version}; skipping upload."
-  else
-    cws_upload "$chrome_zip" "${API_ROOT}/upload/v2/publishers/${CWS_PUBLISHER_ID}/items/${CWS_EXTENSION_ID}:upload"
-    case "$CWS_STATUS" in
-      200|201) ;;
-      401|403) fail "上传认证或权限失败（HTTP ${CWS_STATUS}）：$(api_error_summary)" ;;
-      *) fail "上传失败（HTTP ${CWS_STATUS}）：$(api_error_summary)" ;;
-    esac
-    require_json "上传接口"
-    local upload_state
-    upload_state="$(jq -r '.uploadState // ""' "$CWS_BODY_FILE")"
-    upload_version="$(jq -r '.crxVersion // ""' "$CWS_BODY_FILE")"
-    case "$upload_state" in
-      SUCCEEDED)
-        [[ "$upload_version" == "$zip_version" ]] \
-          || fail "上传接口返回的版本 ${upload_version:-<empty>} 与 ZIP 的 manifest 版本 ${zip_version} 不一致"
-        upload_result="SUCCEEDED"
-        ;;
-      IN_PROGRESS)
-        local attempts="${CWS_UPLOAD_POLL_ATTEMPTS:-24}"
-        local seconds="${CWS_UPLOAD_POLL_SECONDS:-10}"
-        [[ "$attempts" =~ ^[0-9]+$ && "$seconds" =~ ^[0-9]+$ ]] \
-          || fail "上传轮询参数必须是整数"
-        local attempt=1
-        local confirmed=0
-        while (( attempt <= attempts )); do
-          echo "上传处理中，第 ${attempt}/${attempts} 次查询商店状态..."
-          sleep "$seconds"
-          fetch_status
-          case "$LAST_UPLOAD_STATE" in
-            SUCCEEDED) confirmed=1; break ;;
-            FAILED) fail "商店报告本次上传失败（lastAsyncUploadState=FAILED），不会提审" ;;
-            NOT_FOUND) fail "商店未找到本次上传（lastAsyncUploadState=NOT_FOUND），不会提审" ;;
-            IN_PROGRESS|"") ;;
-            *) fail "无法识别的上传状态：${LAST_UPLOAD_STATE}，不会提审" ;;
-          esac
-          attempt=$((attempt + 1))
-        done
-        [[ "$confirmed" == "1" ]] \
-          || fail "上传在 ${attempts} 次轮询内仍未确认成功（最后一次：${LAST_UPLOAD_STATE:-未知}），不会提审；请稍后用 check 模式确认，不要重复上传"
-        upload_result="SUCCEEDED（轮询确认）"
-        ;;
-      FAILED) fail "商店报告上传失败（uploadState=FAILED），不会提审" ;;
-      NOT_FOUND) fail "商店未找到上传结果（uploadState=NOT_FOUND），不会提审" ;;
-      *) fail "无法识别的上传结果：${upload_state:-<empty>}，不会提审" ;;
-    esac
-  fi
+  cws_upload "$chrome_zip" "${API_ROOT}/upload/v2/publishers/${CWS_PUBLISHER_ID}/items/${CWS_EXTENSION_ID}:upload"
+  case "$CWS_STATUS" in
+    200|201) ;;
+    401|403) fail "上传认证或权限失败（HTTP ${CWS_STATUS}）：$(api_error_summary)" ;;
+    *) fail "上传失败（HTTP ${CWS_STATUS}）：$(api_error_summary)" ;;
+  esac
+  require_json "上传接口"
+  local upload_state
+  upload_state="$(jq -r '.uploadState // ""' "$CWS_BODY_FILE")"
+  upload_version="$(jq -r '.crxVersion // ""' "$CWS_BODY_FILE")"
+  case "$upload_state" in
+    SUCCEEDED)
+      [[ "$upload_version" == "$zip_version" ]] \
+        || fail "上传接口返回的版本 ${upload_version:-<empty>} 与 ZIP 的 manifest 版本 ${zip_version} 不一致"
+      upload_result="SUCCEEDED"
+      ;;
+    IN_PROGRESS)
+      local attempts="${CWS_UPLOAD_POLL_ATTEMPTS:-24}"
+      local seconds="${CWS_UPLOAD_POLL_SECONDS:-10}"
+      [[ "$attempts" =~ ^[0-9]+$ && "$seconds" =~ ^[0-9]+$ ]] \
+        || fail "上传轮询参数必须是整数"
+      local attempt=1
+      local confirmed=0
+      while (( attempt <= attempts )); do
+        echo "上传处理中，第 ${attempt}/${attempts} 次查询商店状态..."
+        sleep "$seconds"
+        fetch_status
+        case "$LAST_UPLOAD_STATE" in
+          SUCCEEDED) confirmed=1; break ;;
+          FAILED) fail "商店报告本次上传失败（lastAsyncUploadState=FAILED），不会提审" ;;
+          NOT_FOUND) fail "商店未找到本次上传（lastAsyncUploadState=NOT_FOUND），不会提审" ;;
+          IN_PROGRESS|"") ;;
+          *) fail "无法识别的上传状态：${LAST_UPLOAD_STATE}，不会提审" ;;
+        esac
+        attempt=$((attempt + 1))
+      done
+      [[ "$confirmed" == "1" ]] \
+        || fail "上传在 ${attempts} 次轮询内仍未确认成功（最后一次：${LAST_UPLOAD_STATE:-未知}），不会提审；请稍后用 check 模式确认，不要重复上传"
+      upload_result="SUCCEEDED（轮询确认）"
+      ;;
+    FAILED) fail "商店报告上传失败（uploadState=FAILED），不会提审" ;;
+    NOT_FOUND) fail "商店未找到上传结果（uploadState=NOT_FOUND），不会提审" ;;
+    *) fail "无法识别的上传结果：${upload_state:-<empty>}，不会提审" ;;
+  esac
 
   # The payload is fixed: staged publishing, real review, warnings block.
   printf '%s' '{"publishType":"STAGED_PUBLISH","skipReview":false,"blockOnWarnings":true}' > "$CWS_PUBLISH_BODY"

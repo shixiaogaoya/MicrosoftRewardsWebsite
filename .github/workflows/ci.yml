@@ -15,6 +15,12 @@ jobs:
         working-directory: wxt
     steps:
       - uses: actions/checkout@v4
+      - name: 验证发布与商店提审脚本（模拟，不访问外部服务）
+        shell: bash
+        working-directory: .
+        run: |
+          bash .github/scripts/publish-release.test.sh
+          bash .github/scripts/publish-cws.test.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22

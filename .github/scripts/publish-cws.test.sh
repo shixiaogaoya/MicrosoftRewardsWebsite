@@ -5,6 +5,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-cws.sh"
+export FIXTURE_JQ="$(command -v jq)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -28,7 +29,7 @@ export CWS_UPLOAD_POLL_SECONDS="0"
 cat > "$work/bin/jq" <<'EOF'
 #!/usr/bin/env bash
 set -o pipefail
-/c/Users/ming/.local/bin/jq.exe "$@" | tr -d '\r'
+"$FIXTURE_JQ" "$@" | tr -d '\r'
 EOF
 
 make_zip() {
@@ -319,21 +320,44 @@ printf '%s' '{"tag_name":"v3.1.3","draft":true,"prerelease":false}' > "$work/cas
 MODE=submit RELEASE_TAG=v3.1.3 run submit
 expect_fail "submit-draft-release" "草稿"
 
-# 14. in-progress review blocks upload.
+# 14. the same version in review is already submitted; reruns do not write.
 reset_case
 printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","publishedItemRevisionStatus":{"state":"PUBLISHED","distributionChannels":[{"crxVersion":"3.1.2"}]},"submittedItemRevisionStatus":{"state":"PENDING_REVIEW","distributionChannels":[{"crxVersion":"3.1.3"}]}}' \
   > "$work/case/curl/fetch-body"
 MODE=submit RELEASE_TAG=v3.1.3 run submit
-expect_fail "submit-blocked-by-pending-review" "正在审核"
-! grep -q ':upload' "$work/case/curl.log" || { echo "FAIL upload attempted during pending review"; exit 1; }
-echo "PASS submit-no-upload-during-review"
+expect_ok "submit-skips-same-version-pending-review"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted during same-version review"; exit 1; }
+grep -q 'PENDING_REVIEW' "$work/case/summary.md" || { echo "FAIL existing review status missing"; exit 1; }
+echo "PASS submit-no-writes-during-same-version-review"
 
-# 15. same version already published blocks resubmission.
+reset_case
+printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","submittedItemRevisionStatus":{"state":"PENDING_REVIEW","distributionChannels":[{"crxVersion":"3.1.4"}]}}' \
+  > "$work/case/curl/fetch-body"
+MODE=submit RELEASE_TAG=v3.1.3 run submit
+expect_fail "submit-blocked-by-other-pending-review" "正在审核"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted during another review"; exit 1; }
+
+reset_case
+printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","submittedItemRevisionStatus":{"state":"PENDING_REVIEW"}}' \
+  > "$work/case/curl/fetch-body"
+MODE=submit RELEASE_TAG=v3.1.3 run submit
+expect_fail "submit-blocked-by-unknown-pending-review-version" "正在审核"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted for unknown review version"; exit 1; }
+
+# 15. the same version already published is a successful no-op.
 reset_case
 printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","publishedItemRevisionStatus":{"state":"PUBLISHED","distributionChannels":[{"crxVersion":"3.1.3"}]}}' \
   > "$work/case/curl/fetch-body"
 MODE=submit RELEASE_TAG=v3.1.3 run submit
-expect_fail "submit-blocked-by-published-same-version" "不会重复提交"
+expect_ok "submit-skips-published-same-version"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted for published version"; exit 1; }
+
+reset_case
+printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","publishedItemRevisionStatus":{"state":"PUBLISHED_TO_TESTERS","distributionChannels":[{"crxVersion":"3.1.3"}]}}' \
+  > "$work/case/curl/fetch-body"
+MODE=submit RELEASE_TAG=v3.1.3 run submit
+expect_ok "submit-skips-same-version-published-to-testers"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted for tester version"; exit 1; }
 
 # 16. another version staged blocks overwriting.
 reset_case
@@ -342,15 +366,15 @@ printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","publishedItemRevision
 MODE=submit RELEASE_TAG=v3.1.3 run submit
 expect_fail "submit-blocked-by-other-staged" "STAGED"
 
-# 17. a same-version staged revision is published without re-upload.
+# 17. a same-version staged revision is left ready for manual public launch.
 reset_case
 printf '%s' '{"itemId":"abcdefghijklmnopabcdefghijklmnop","publishedItemRevisionStatus":{"state":"PUBLISHED","distributionChannels":[{"crxVersion":"3.1.2"}]},"submittedItemRevisionStatus":{"state":"STAGED","distributionChannels":[{"crxVersion":"3.1.3"}]}}' \
   > "$work/case/curl/fetch-body"
 MODE=submit RELEASE_TAG=v3.1.3 run submit
-expect_ok "submit-reuses-staged-same-version"
-! grep -q ':upload' "$work/case/curl.log" || { echo "FAIL upload attempted for staged version"; exit 1; }
-grep -q ':publish' "$work/case/curl.log" || { echo "FAIL publish missing"; exit 1; }
-echo "PASS submit-staged-reused-and-published"
+expect_ok "submit-skips-staged-same-version"
+! grep -q '^POST ' "$work/case/curl.log" || { echo "FAIL write attempted for staged version"; exit 1; }
+grep -q '等待手动上线' "$work/case/summary.md" || { echo "FAIL staged next step missing"; exit 1; }
+echo "PASS submit-staged-ready-without-writes"
 
 # 18. successful upload then publish with the exact payload.
 reset_case

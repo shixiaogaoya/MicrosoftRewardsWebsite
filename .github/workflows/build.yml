@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm_release:
-        description: 对 master 当前版本检查和打包；若正式 Release 尚不存在，将创建标签和 Release，并提交 Chrome 商店审核
+        description: 对 master 当前版本检查和打包，创建或复用同一提交的正式 Release，自动上传 Chrome 商店并提审
         type: boolean
         required: true
         default: false

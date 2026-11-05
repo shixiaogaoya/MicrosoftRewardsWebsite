@@ -8,7 +8,8 @@
 # prerelease. Nothing here moves an existing tag or replaces a Release.
 set -euo pipefail
 
-# Only a newly published stable Release on master can trigger store submission.
+# A stable Release for this exact master commit can trigger store submission,
+# including a rerun after Release creation succeeded but store submission failed.
 printf 'store_release_tag=\n' >> "$GITHUB_OUTPUT"
 
 summary() {
@@ -115,15 +116,28 @@ release_state() {
 
 skip_existing() {
   local reason="$1"
-  local release_url
+  local release_url store_note="不触发（仅处理 master 的正式版本）"
   release_url="$(gh api "repos/${GH_REPO}/releases/tags/${release_tag}" --jq '.html_url')"
   [[ -n "$release_url" && "$release_url" != "null" ]] || fail "Release $release_tag 已存在，但没有返回地址"
+  if [[ "$prerelease" == "0" && "${GITHUB_REF:-}" == "refs/heads/master" ]]; then
+    api_status "repos/${GH_REPO}/git/ref/tags/${release_tag}"
+    require_status "$API_STATUS" "200" "无法确认已有 Release 的标签 $release_tag"
+    local tag_commit
+    tag_commit="$(resolve_tag_commit "$release_tag")"
+    if [[ "$tag_commit" == "$BUILD_SHA" ]]; then
+      printf 'store_release_tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
+      store_note="继续检查并上传或提审 ${release_tag}（已有 Release 指向本次提交）"
+    else
+      store_note="不触发（${release_tag} 指向其他提交；同版本普通提交不重复提审）"
+    fi
+  fi
   summary \
     "- 构建版本：${package_version}" \
     "- 提交 SHA：${BUILD_SHA}" \
     "- 是否创建标签：否" \
     "- Release：${release_url}" \
-    "- 跳过原因：${reason}"
+    "- 跳过原因：${reason}" \
+    "- 商店衔接：${store_note}"
   echo "Skipped release: $reason"
   exit 0
 }
@@ -167,7 +181,7 @@ Rewards 助手 ${package_version}
 - Firefox：下载文件名含 firefox 的 ZIP，按 README 临时载入或安装。
 - GitHub 自动附带的 Source code 归档是源码，请使用上面两份扩展 ZIP。
 
-master 发布流程会在新建正式 Release 后上传 Chrome ZIP 并提交商店审核；审核通过后仍需手动上线。创建 Release 不代表扩展已经在商店上线。使用前请查看仓库 README 的已知问题与验证范围。
+master 发布流程会上传 Chrome ZIP 并提交商店审核；同一提交重跑时可复用已有 Release 继续商店步骤。审核通过后仍需手动上线。创建 Release 不代表扩展已经在商店上线。使用前请查看仓库 README 的已知问题与验证范围。
 EOF
   # An annotated tag records a tagger, and the runner has no git identity.
   # Pass one explicitly instead of relying on repository or global config.

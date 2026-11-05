@@ -4,6 +4,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-release.sh"
+export FIXTURE_JQ="$(command -v jq)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -28,7 +29,8 @@ make_zip "3.1.3" "$work/repo/artifacts/extension-firefox/rewards-3.1.3-firefox.z
 
 cat > "$work/bin/jq" <<'EOF'
 #!/usr/bin/env bash
-exec /c/Users/ming/.local/bin/jq.exe "$@"
+set -o pipefail
+"$FIXTURE_JQ" "$@" | tr -d '\r'
 EOF
 
 cat > "$work/bin/gh" <<'EOF'
@@ -240,7 +242,23 @@ run_case new-version create v3.1.3
 
 prepare_absent existing-release
 set_state existing-release release-v3.1.3 exists
-run_case existing-release skip ''
+set_state existing-release tag-v3.1.3 same
+run_case existing-release skip v3.1.3
+[[ ! -s "$work/cases/existing-release/git.log" ]] || { echo "FAIL existing release wrote to git"; exit 1; }
+
+prepare_absent existing-release-annotated-tag
+set_state existing-release-annotated-tag release-v3.1.3 exists
+set_state existing-release-annotated-tag tag-v3.1.3 annotated
+run_case existing-release-annotated-tag skip v3.1.3
+
+prepare_absent existing-release-missing-tag
+set_state existing-release-missing-tag release-v3.1.3 exists
+run_case existing-release-missing-tag fail ''
+
+prepare_absent existing-release-tag-query-error
+set_state existing-release-tag-query-error release-v3.1.3 exists
+set_state existing-release-tag-query-error tag-v3.1.3 503
+run_case existing-release-tag-query-error fail ''
 
 # Normal master commits retain the version but no longer match its old tag.
 prepare_absent existing-release-older-tag
@@ -272,6 +290,13 @@ run_case tag-query-error fail ''
 prepare_absent annotated-tag
 set_state annotated-tag tag-v3.1.3 annotated
 run_case annotated-tag reuse v3.1.3
+
+# Manual reruns of the same master commit also continue to store submission.
+prepare_absent manual-existing-release
+set_state manual-existing-release release-v3.1.3 exists
+set_state manual-existing-release tag-v3.1.3 same
+run_case manual-existing-release skip v3.1.3 \
+  env GITHUB_EVENT_NAME="workflow_dispatch" CONFIRM_RELEASE="true"
 
 # Tag-triggered releases, including prereleases, never request store submission.
 prepare_absent stable-tag
@@ -307,7 +332,7 @@ run_case manual-unconfirmed fail '' \
 
 prepare_absent raced-publish
 set_state raced-publish push-v3.1.3 race
-run_case raced-publish skip ''
+run_case raced-publish skip v3.1.3
 
 # A wrong manifest version must fail before any tag or release is considered.
 prepare_absent bad-manifest
