@@ -8,6 +8,7 @@ import {
     RESULTS_KEY,
     RUN_KEY,
     STEP_KEY,
+    type CommandReceipt,
     type RunConfig,
     type RunPhase,
     type RunProgress,
@@ -19,7 +20,7 @@ import {
     type TaskStatus,
 } from '@/entrypoints/utils/runState';
 
-export type { RunConfig, RunPhase, RunProgress, TaskKind, TaskResult, TaskResults, TaskRunState, TaskStatus };
+export type { CommandReceipt, RunConfig, RunPhase, RunProgress, TaskKind, TaskResult, TaskResults, TaskRunState, TaskStatus };
 
 let chain: Promise<void> = Promise.resolve();
 

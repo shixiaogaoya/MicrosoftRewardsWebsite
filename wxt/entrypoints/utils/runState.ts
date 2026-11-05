@@ -19,6 +19,11 @@ export interface TaskResult {
     reason?: string;
 }
 
+// What the background answers a start, a stop or a single-task retry with.
+// `reason` is set on every refusal, in the popup's own wording, so a click that
+// did nothing is explained instead of silently ignored.
+export type CommandReceipt = { accepted: true } | { accepted: false; reason: string };
+
 export interface TaskRunState {
     id: number;
     phase: RunPhase;

@@ -13,7 +13,7 @@ import {
 import { migrateRunState } from './background/stateMigration';
 import { handleAlarmStep, mayOpenFirstResult, watchSearchesToggle } from './background/searchRunner';
 import { isCleanupAlarm, sweepStaleTabs } from './background/tabCleanup';
-import type { TaskKind } from './background/taskRun';
+import type { CommandReceipt, TaskKind } from './background/taskRun';
 
 const TASK_KINDS: readonly TaskKind[] = ['search', 'daily', 'claim'];
 
@@ -21,6 +21,13 @@ function requestedTasks(value: unknown): TaskKind[] | undefined {
     if (!Array.isArray(value)) return undefined;
     const kinds = value.filter((item): item is TaskKind => TASK_KINDS.includes(item as TaskKind));
     return kinds.length > 0 ? kinds : undefined;
+}
+
+// runRewards and stopRewards refuse with their own reasons; an unexpected throw
+// still has to answer, or the popup's request would hang until its channel
+// closes with the popup.
+function failedReceipt(): CommandReceipt {
+    return { accepted: false, reason: '操作未能完成，请重试' };
 }
 
 export default defineBackground(() => {
@@ -36,13 +43,24 @@ export default defineBackground(() => {
     browser.runtime.onMessage.addListener((request: { action?: string; only?: unknown }, sender: { tab?: { id?: number } }, sendResponse: (response?: unknown) => void) => {
         // The button is a manual start: it may re-run a task already attempted
         // today. `only` limits that to the tasks the button named, so a retry of
-        // one failure does not restart the others.
-        if (request.action === 'popup') void runRewards({ manual: true, only: requestedTasks(request.only) });
-        else if (request.action === 'stop') void stopRewards();
-        else if (request.action === 'bingFirstResult') {
+        // one failure does not restart the others. Start and stop answer with a
+        // receipt, so a click the background refused is shown as refused.
+        if (request.action === 'popup') {
+            void runRewards({ manual: true, only: requestedTasks(request.only) }).then(
+                (receipt) => sendResponse(receipt),
+                () => sendResponse(failedReceipt())
+            );
+            return true;
+        } else if (request.action === 'stop') {
+            void stopRewards().then(
+                (receipt) => sendResponse(receipt),
+                () => sendResponse(failedReceipt())
+            );
+            return true;
+        } else if (request.action === 'bingFirstResult') {
             // The bing-result content script asks this before leaving the
             // results page, and awaits the reply. Returning true keeps the
-            // channel open for it; the actions above answer nothing.
+            // channel open for it.
             void mayOpenFirstResult(sender.tab?.id).then((allowed) => sendResponse({ allowed }));
             return true;
         }

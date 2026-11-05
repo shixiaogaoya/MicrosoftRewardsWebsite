@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { browser } from 'wxt/browser';
+import type { CommandReceipt } from '@/entrypoints/utils/runState';
 import Icon from './Icon';
 
 interface ManualClaimButtonProps {
@@ -14,29 +16,44 @@ interface ManualClaimButtonProps {
 // does not disable it: that switch only stops the alarm and startup from
 // starting a round on their own.
 function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }: ManualClaimButtonProps) {
+    // The background answers with a receipt. A refusal — a start that found a
+    // round already running, a stop with nothing left to stop — is shown next
+    // to the button, so the click is explained instead of silently ignored.
+    const [rejection, setRejection] = useState<string | null>(null);
     // The disabled prop carries the settings' read/save state, which only
     // matters for starting: starting runs on the values on screen. Stopping
     // sends no values, so a running round keeps the button available unless its
     // stop request is already in flight.
     const blocked = isRunning ? isStopping : disabled || !canStart;
-    function handleClick() {
+    async function handleClick() {
         if (blocked) return;
+        setRejection(null);
         if (isRunning) onStop();
-        browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' });
+        try {
+            const receipt = await browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' }) as CommandReceipt | undefined;
+            if (receipt && !receipt.accepted) setRejection(receipt.reason);
+        } catch {
+            setRejection('未收到后台响应，请重试');
+        }
     }
 
     const label = isStopping ? '正在停止' : isRunning ? '停止任务' : '开始任务';
     return (
-        <button
-            id="button"
-            className="btn action-button"
-            onClick={handleClick}
-            disabled={blocked}
-            aria-disabled={blocked}
-        >
-            <Icon name={isRunning ? 'square' : 'play'} />
-            {label}
-        </button>
+        <>
+            <button
+                id="button"
+                className="btn action-button"
+                onClick={handleClick}
+                disabled={blocked}
+                aria-disabled={blocked}
+            >
+                <Icon name={isRunning ? 'square' : 'play'} />
+                {label}
+            </button>
+            {rejection && (
+                <p className="field-warning" role="status">{rejection}</p>
+            )}
+        </>
     );
 }
 

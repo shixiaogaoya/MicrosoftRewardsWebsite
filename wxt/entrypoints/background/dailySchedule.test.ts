@@ -94,7 +94,7 @@ describe('runRewards', () => {
     });
     await seed({ autoDaily: false });
 
-    await expect(runRewards()).resolves.toBeUndefined();
+    await expect(runRewards()).resolves.toEqual({ accepted: true });
     await flushPendingWork();
 
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
@@ -184,6 +184,55 @@ describe('runRewards', () => {
     await flushPendingWork();
 
     expect(urls).toEqual([]);
+  });
+
+  // Regression: a refused command used to return silently, so a retry of a task
+  // that had been switched off did nothing with no explanation — and a start
+  // that overlapped another round was dropped the same way.
+  it('refuses a retry whose task is switched off, without re-enabling it', async () => {
+    const urls = trackCreatedTabs();
+    await seed({ autoDaily: false, claimPoints: false });
+
+    await expect(runRewards({ manual: true, only: ['daily'] })).resolves.toEqual({
+      accepted: false,
+      reason: '该任务已关闭，请在设置中开启',
+    });
+    await flushPendingWork();
+
+    expect(urls).toEqual([]);
+    expect(await getStorageItem<boolean>('autoDaily', StorageValues.SYNC)).toBe(false);
+  });
+
+  it('refuses a start while another round is still running', async () => {
+    trackCreatedTabs();
+    await seed({ active: false, autoDaily: false, claimPoints: true });
+    await beginRun(['claim'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    await expect(runRewards({ manual: true, only: ['claim'] })).resolves.toEqual({
+      accepted: false,
+      reason: '已有任务运行中',
+    });
+  });
+
+  it('refuses a start when the settings cannot be read', async () => {
+    const urls = trackCreatedTabs();
+    await seed({});
+    vi.spyOn(fakeBrowser.storage.sync, 'get').mockRejectedValue(new Error('sync storage unavailable'));
+
+    await expect(runRewards({ manual: true })).resolves.toEqual({
+      accepted: false,
+      reason: '设置读取失败，请重试',
+    });
+    await flushPendingWork();
+
+    expect(urls).toEqual([]);
+  });
+
+  it('refuses a stop when nothing is running', async () => {
+    await expect(stopRewards()).resolves.toEqual({
+      accepted: false,
+      reason: '当前没有运行中的任务',
+    });
   });
 });
 

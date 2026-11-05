@@ -5,7 +5,7 @@ import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { DEFAULTS, clampSetting } from '@/entrypoints/utils/settings';
 import { localDateId } from '@/entrypoints/utils/localDate';
 import { setBadgeText } from '@/entrypoints/utils/browserAction';
-import { MIGRATION_KEY, STATE_MIGRATION_VERSION, type RunConfig, type TaskKind, type TaskResult } from '@/entrypoints/utils/runState';
+import { MIGRATION_KEY, STATE_MIGRATION_VERSION, type CommandReceipt, type RunConfig, type TaskKind, type TaskResult } from '@/entrypoints/utils/runState';
 import { openDailyRewards } from './dailyRewards';
 import { finishSearch, startSearches, stopSearches } from './searchRunner';
 import { clearTrackedTabs } from './tabCleanup';
@@ -65,23 +65,38 @@ export interface RunOptions {
     only?: TaskKind[];
 }
 
-// Runs the tasks the user has selected. The dashboard visit (daily cards and
-// claim share one tab) and the searches start together and neither waits on
-// the other: a dashboard that fails must not block the searches.
-export async function runRewards(options: RunOptions = {}): Promise<void> {
-    const plan = await planRound();
+// Runs the tasks the user has selected, and answers with a receipt: accepted
+// once the round has started, or the reason it was refused. The dashboard visit
+// (daily cards and claim share one tab) and the searches start together and
+// neither waits on the other: a dashboard that fails must not block the
+// searches.
+export async function runRewards(options: RunOptions = {}): Promise<CommandReceipt> {
+    let plan: RoundPlan;
+    try {
+        plan = await planRound();
+    } catch {
+        // Without the settings there is no round to run, and a click that
+        // silently did nothing reads as a broken button.
+        return { accepted: false, reason: '设置读取失败，请重试' };
+    }
     const kinds = kindsOf(plan, options.only);
-    if (kinds.length === 0) return;
+    if (kinds.length === 0) {
+        // `only` is the per-result retry: the task it names is switched off
+        // now, and the retry says so instead of silently doing nothing — or
+        // switching the task back on by itself.
+        return { accepted: false, reason: options.only ? '该任务已关闭，请在设置中开启' : '请在设置中选择至少一项任务' };
+    }
 
     const today = localDateId();
     const attempts = options.manual ? {} : await readAttempts();
     const pending = kinds.filter((kind) => attempts[kind] !== today);
-    if (pending.length === 0) return;
+    if (pending.length === 0) return { accepted: false, reason: '今日已尝试' };
 
-    // A second click, or the daily alarm overlapping the button, joins the round
-    // already in flight instead of opening another search and another dashboard.
+    // A second click, or the daily alarm overlapping the button, opens no other
+    // search and no other dashboard: that round is still in flight, and the
+    // request is refused with that reason.
     const run = await beginRun(pending, plan.config);
-    if (!run.started) return;
+    if (!run.started) return { accepted: false, reason: '已有任务运行中' };
 
     // Record the attempt before any tab opens. A crash after this point still
     // counts as "tried today", so the six-hour alarm does not start a second
@@ -108,6 +123,7 @@ export async function runRewards(options: RunOptions = {}): Promise<void> {
             await finishSearch(run.id, { status: 'failed', reason: reasonOf(error) });
         }
     }
+    return { accepted: true };
 }
 
 async function failDashboard(runId: number, pending: TaskKind[], error: unknown): Promise<void> {
@@ -124,15 +140,18 @@ function reasonOf(error: unknown): string {
     return '未能打开每日活动页面';
 }
 
-// Stops the searches and the dashboard visit of this round. The daily toggles
-// are left as the user set them. Closing "每日自动执行" does not come through
-// here — that only stops future automatic starts.
-export async function stopRewards(): Promise<void> {
+// Stops the searches and the dashboard visit of this round, and answers with a
+// receipt like a start does. The daily toggles are left as the user set them.
+// Closing "每日自动执行" does not come through here — that only stops future
+// automatic starts.
+export async function stopRewards(): Promise<CommandReceipt> {
     const runId = await requestStop();
     await stopSearches();
-    if (runId == null) return;
+    // Nothing is running, or the round ended between the click and here: the
+    // stop is refused with that reason instead of being dropped.
+    if (runId == null) return { accepted: false, reason: '当前没有运行中的任务' };
     const run = await currentRun();
-    if (!run || run.id !== runId) return;
+    if (!run || run.id !== runId) return { accepted: false, reason: '当前没有运行中的任务' };
     // Only the kinds this round started. settleUnresolved ignores the rest, and
     // naming them here keeps a stop from being read as "cancel every task".
     const started: TaskKind[] = (['search', 'daily', 'claim'] as const).filter((kind) => run[kind]);
@@ -146,6 +165,7 @@ export async function stopRewards(): Promise<void> {
     // a page the user opened afterwards — reuse that id and be closed instead.
     // The dashboard visit ends the daily and claim records when it closes.
     await endRun(runId, 'search');
+    return { accepted: true };
 }
 
 // Automatic entry point. Skipped entirely while auto-run is off, and each task

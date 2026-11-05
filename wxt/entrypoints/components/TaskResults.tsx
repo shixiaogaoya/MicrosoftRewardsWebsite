@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { browser } from 'wxt/browser';
-import type { TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
+import type { CommandReceipt, TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
 import Icon from './Icon';
 
 const LABELS: Record<TaskKind, string> = {
@@ -53,8 +54,21 @@ function TaskResultsList({ results, isRunning }: TaskResultsProps) {
 }
 
 function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResult; isRunning: boolean }) {
+    // The retry asks the background and shows its answer on the row it belongs
+    // to. A task whose toggle was switched off after it ran is refused — told
+    // so, not silently ignored, and never switched back on by the retry itself.
+    const [rejection, setRejection] = useState<string | null>(null);
     const canRetry = !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
     const tone = TONE[result.status];
+    async function retryTask(): Promise<void> {
+        setRejection(null);
+        try {
+            const receipt = await browser.runtime.sendMessage({ action: 'popup', only: [kind] }) as CommandReceipt | undefined;
+            if (receipt && !receipt.accepted) setRejection(receipt.reason);
+        } catch {
+            setRejection('未收到后台响应，请重试');
+        }
+    }
     return (
         <li className="task-item">
             <span className={`task-indicator task-indicator--${result.status === 'failed' ? 'error' : tone}`} aria-hidden="true">
@@ -66,20 +80,17 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
                     <span className="task-actions">
                         <span className={`task-status task-status--${result.status === 'failed' ? 'error' : tone}`}>{STATUS_TEXT[result.status]}</span>
                         {canRetry && (
-                            <button type="button" className="task-retry" onClick={() => retry(kind)} aria-label={`重试${LABELS[kind]}`}>
+                            <button type="button" className="task-retry" onClick={retryTask} aria-label={`重试${LABELS[kind]}`}>
                                 <Icon name="rotate-ccw" />
                             </button>
                         )}
                     </span>
                 </div>
                 {result.reason && <p className="task-reason">{result.reason}</p>}
+                {rejection && !isRunning && <p className="task-reason" role="status">{rejection}</p>}
             </div>
         </li>
     );
-}
-
-function retry(kind: TaskKind): void {
-    browser.runtime.sendMessage({ action: 'popup', only: [kind] });
 }
 
 export default TaskResultsList;
