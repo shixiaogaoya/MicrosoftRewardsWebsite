@@ -2,18 +2,15 @@ import { defineContentScript } from '#imports';
 import { browser } from 'wxt/browser';
 import { getRndInteger, wait } from '@/entrypoints/utils/helpers';
 import { oncePerPageRun } from '@/entrypoints/utils/oncePerPageRun';
+import { MAX_WAIT_MS, OPEN_DELAY_MIN_MS, OPEN_DELAY_SPREAD_MS, RESULT_SELECTOR } from '@/entrypoints/utils/firstResult';
 
 // On search tabs the extension opened (tagged with ?marAuto=1), navigate to the
 // first organic Bing result after a short random delay, so the visit reads as a
 // normal search-and-click rather than a results page nobody looked at. Opt-in
 // from the popup and off by default, since leaving the results page risks the
 // search not being credited. Manual Bing searches lack the marker and are left
-// alone.
-const RESULT_SELECTOR = '#b_results li.b_algo h2 a';
-const MAX_WAIT_MS = 8000;
-// Wait a randomized 1.5–5.5s before opening so it isn't an instant, robotic jump.
-const OPEN_DELAY_MIN_MS = 1500;
-const OPEN_DELAY_SPREAD_MS = 4000;
+// alone. The timing constants live in utils/firstResult.ts, shared with the
+// background, which schedules this tab's close around the same window.
 
 export default defineContentScript({
     matches: ['https://www.bing.com/search*'],

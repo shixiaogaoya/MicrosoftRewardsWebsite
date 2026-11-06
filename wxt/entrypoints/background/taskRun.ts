@@ -7,6 +7,7 @@ import {
     PROGRESS_KEY,
     RESULTS_KEY,
     RUN_KEY,
+    SEARCH_GRANTS_KEY,
     STEP_KEY,
     type CommandReceipt,
     type RunConfig,
@@ -62,6 +63,10 @@ export function abandonRun(reason: string): Promise<void> {
         if (progress?.isSearching) {
             await setStorageItem(PROGRESS_KEY, { ...progress, isSearching: false }, StorageValues.LOCAL);
         }
+        // The round's tabs died with the restart too, so their grants point at
+        // nothing — and tab ids do not survive a restart, so a leftover grant
+        // could name a tab the new session reuses for something else.
+        await setStorageItem(SEARCH_GRANTS_KEY, {}, StorageValues.LOCAL);
         await write(null);
     });
 }
@@ -247,13 +252,46 @@ export function noteSearchDeadline(runId: number, deadline: number): Promise<voi
 // The search half's own tab list, the mirror of the dashboard's single tab
 // above. Only a tab named here is later allowed to leave the results page, so
 // a page that merely carries the ?marAuto marker cannot ask its way into a
-// navigation.
+// navigation. Naming the tab also grants the navigation, in a store that
+// outlives the round: the last step finishes the round the moment its tab
+// opens, while the tab only asks seconds later, so a grant held by the run
+// record would refuse the last tab of every round — the only tab of a
+// one-search round included.
 export function noteSearchTab(runId: number, tabId: number): Promise<void> {
     return enqueue(async () => {
         const state = await read();
         if (!state || state.id !== runId) return;
         if (state.searchTabIds?.includes(tabId)) return;
         await write({ ...state, searchTabIds: [...(state.searchTabIds ?? []), tabId] });
+        const grants = await readSearchGrants();
+        await setStorageItem(SEARCH_GRANTS_KEY, { ...grants, [String(tabId)]: runId }, StorageValues.LOCAL);
+    });
+}
+
+// Which tab may leave the results page, and which round said so. The id is
+// what scopes a revocation: a stop ends exactly its own round's grants and
+// cannot touch whatever round is current now.
+export type SearchTabGrants = Record<string, number>;
+
+export async function readSearchGrants(): Promise<SearchTabGrants> {
+    return (await getStorageItem<SearchTabGrants>(SEARCH_GRANTS_KEY, StorageValues.LOCAL)) ?? {};
+}
+
+// A stop, or the search toggle turned off, revokes what that round granted.
+export function revokeSearchGrants(runId: number): Promise<void> {
+    return enqueue(async () => {
+        const grants = await readSearchGrants();
+        const kept = Object.fromEntries(Object.entries(grants).filter(([, id]) => id !== runId));
+        await setStorageItem(SEARCH_GRANTS_KEY, kept, StorageValues.LOCAL);
+    });
+}
+
+// Every grant at once. Used when no round holds the search half — the toggle
+// was turned off after a round already finished — and after a restart, where
+// the tab ids the grants name no longer exist.
+export function clearSearchGrants(): Promise<void> {
+    return enqueue(async () => {
+        await setStorageItem(SEARCH_GRANTS_KEY, {}, StorageValues.LOCAL);
     });
 }
 

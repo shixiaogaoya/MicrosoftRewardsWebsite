@@ -4,7 +4,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { finishSearch, handleAlarmStep, mayOpenFirstResult, startSearches, stopSearches } from './searchRunner';
+import { stopRewards } from './dailySchedule';
 import { beginRun, endRun, noteSearchTab, requestStop } from './taskRun';
+import { FIRST_RESULT_NAV_WINDOW_MS } from '@/entrypoints/utils/firstResult';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { PROGRESS_KEY, RESULTS_KEY, RUN_KEY, type RunProgress, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
@@ -216,8 +218,10 @@ describe('searchRunner', () => {
     // Regression: the result write used to be awaited ahead of the cleanup
     // steps with nothing in between, so a transient failure of that one write
     // escaped before any of them — leaving the flag up, the badge on, the
-    // alarms armed and the run record blocking every later start.
-    it('still clears the flag, badge, alarms and record when the result write fails', async () => {
+    // alarms armed and the run record blocking every later start. The record
+    // itself is now the one thing kept (see the re-entry test below): a result
+    // that never landed must not leave a record saying nothing is running.
+    it('still clears the flag, badge and alarms when the result write fails, but keeps the record', async () => {
       await seed({});
       const runId = await startRound(1);
       await fakeBrowser.action.setBadgeText({ text: '1' });
@@ -233,9 +237,44 @@ describe('searchRunner', () => {
       await expect(finishSearch(runId, { status: 'completed' })).rejects.toThrow('results write failed');
 
       expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
-      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
       expect(await fakeBrowser.alarms.getAll()).toEqual([]);
       expect(await fakeBrowser.action.getBadgeText({})).toBe('');
+    });
+
+    // Regression: endRun used to run whatever happened to the result write, so
+    // a transient failure deleted the record while the result still said
+    // 'running' — and the finishSearch that re-enters through runRewards'
+    // catch then found no record and recorded nothing, so the search stayed
+    // "running" (reported as not running, not retryable) until the next round
+    // overwrote it. The record now survives the failed write, so the re-entry
+    // settles both the result and the record.
+    it('keeps the record when the result write fails, so the re-entering end settles it', async () => {
+      await seed({});
+      const runId = await startRound(1);
+      let failedOnce = false;
+      const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+      vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+        if (!failedOnce && Object.keys(items ?? {}).some((key) => key.includes('taskResults'))) {
+          failedOnce = true;
+          throw new Error('results write failed');
+        }
+        await set(items);
+      });
+
+      // The first finishSearch loses its result write; the record it leaves
+      // behind is what tells the popup a round is (un)settled and what lets
+      // the re-entry below record on it.
+      await expect(finishSearch(runId, { status: 'failed', reason: 'tab creation failed' })).rejects.toThrow('results write failed');
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).not.toBeNull();
+
+      // What runRewards' catch does next: call the end step again.
+      await finishSearch(runId, { status: 'failed', reason: 'tab creation failed' });
+
+      expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
+        search: { status: 'failed', reason: 'tab creation failed' },
+      });
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     });
 
     // Regression: the cleanup inside the end step is global — the badge, the
@@ -361,6 +400,78 @@ describe('searchRunner', () => {
     });
   });
 
+  describe('closing a marked tab', () => {
+    // Regression: the close timer started at the results page's own load, so a
+    // zero close time closed a marked tab 0–1s in — always before the
+    // randomized 1.5–5.5s pause that precedes the first-result navigation,
+    // which therefore never happened. A marked tab now gets its whole
+    // navigation window ahead of the close timer.
+    it('keeps a marked tab open through the navigation window at a zero close time', async () => {
+      vi.useFakeTimers();
+      try {
+        await seed({ openFirstResult: true });
+        const run = await beginRun(['search'], { searches: 1, timeout: 60, closeTime: 0 });
+        let createdTabId: number | undefined;
+        const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+        vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+          const tab = await create(info);
+          createdTabId = tab.id;
+          return tab;
+        });
+        const remove = vi.spyOn(fakeBrowser.tabs, 'remove').mockResolvedValue(undefined);
+
+        await startSearches(run.id, { searches: 1, timeout: 60, closeTime: 0 });
+        await fakeBrowser.tabs.onUpdated.trigger(createdTabId!, { status: 'complete' }, {} as any);
+
+        // The sweep deadline carries the navigation window too (60s is the
+        // runner's load allowance), so the durable sweep cannot close the tab
+        // mid-navigate on a slow-loading page.
+        const tracked = await getStorageItem<Record<string, number>>('trackedTabs', StorageValues.LOCAL);
+        expect(tracked?.[String(createdTabId)] ?? 0).toBeGreaterThanOrEqual(
+          Date.now() + FIRST_RESULT_NAV_WINDOW_MS + 60_000
+        );
+
+        // One second in — where the old zero close time had already closed it,
+        // while the navigation cannot even have started (1.5s minimum).
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(remove).not.toHaveBeenCalled();
+
+        // Past the whole navigation window the tab does close.
+        await vi.advanceTimersByTimeAsync(FIRST_RESULT_NAV_WINDOW_MS + 1_500);
+        expect(remove).toHaveBeenCalledWith(createdTabId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // The navigation window only delays a tab the marker was added to. With
+    // the setting off nothing will navigate, so a zero close time still means
+    // "close once loaded".
+    it('closes an unmarked tab at the configured close time', async () => {
+      vi.useFakeTimers();
+      try {
+        await seed({ openFirstResult: false });
+        const run = await beginRun(['search'], { searches: 1, timeout: 60, closeTime: 0 });
+        let createdTabId: number | undefined;
+        const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+        vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+          const tab = await create(info);
+          createdTabId = tab.id;
+          return tab;
+        });
+        const remove = vi.spyOn(fakeBrowser.tabs, 'remove').mockResolvedValue(undefined);
+
+        await startSearches(run.id, { searches: 1, timeout: 60, closeTime: 0 });
+        await fakeBrowser.tabs.onUpdated.trigger(createdTabId!, { status: 'complete' }, {} as any);
+
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(remove).toHaveBeenCalledWith(createdTabId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('mayOpenFirstResult', () => {
     // The bing-result content script asks this before leaving the results page;
     // the opened tab is named in the run record when "Open first result" adds
@@ -373,6 +484,42 @@ describe('searchRunner', () => {
 
       const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
       expect(state?.searchTabIds).toHaveLength(1);
+    });
+
+    // Regression: a failed registration left the created tab neither named in
+    // the run record nor tracked for the sweep, so nothing would ever close it.
+    // The tab is now removed as best effort before the error settles the round.
+    it('closes the created tab when naming it in the run record fails', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+      const remove = vi.spyOn(fakeBrowser.tabs, 'remove').mockResolvedValue(undefined);
+      let registryBroken = true;
+      const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+      vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+        const keys = Object.keys(items ?? {});
+        // noteSearchTab writes the run record on its own; break exactly that
+        // write once, so the round can still be settled afterwards.
+        if (registryBroken && keys.length === 1 && keys[0] === 'taskRun') {
+          registryBroken = false;
+          throw new Error('run record write failed');
+        }
+        await set(items);
+      });
+
+      await startSearches(runId, { searches: 5, timeout: 60, closeTime: 5 });
+
+      expect(remove).toHaveBeenCalledWith(createdTabId);
+      expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
+        search: { status: 'failed', reason: 'run record write failed' },
+      });
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     });
 
     // Regression: the tab used to be named only after the slower bookkeeping
@@ -415,6 +562,50 @@ describe('searchRunner', () => {
       await expect(mayOpenFirstResult(7)).resolves.toBe(true);
     });
 
+    // Regression: the last step finished the round the moment its tab opened,
+    // and the finished round then refused the tab's second ask — so with the
+    // setting on, the last tab of every round never navigated. The grant is
+    // recorded outside the run record and outlives the schedule; only a stop
+    // or a turned-off toggle revokes it.
+    it('still allows the last tab once the round has finished', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound(4);
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+
+      await handleAlarmStep(stepAlarm(runId, 5));
+
+      // The round is over — the record is gone with it — yet the tab it opened
+      // may still be waiting to leave the results page.
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+      await expect(mayOpenFirstResult(createdTabId)).resolves.toBe(true);
+    });
+
+    // The one-search round is the extreme case: its first step is also its
+    // last, so the old round check refused the round's only tab every time and
+    // the option never worked at all.
+    it('still allows the only tab of a one-search round', async () => {
+      await seed({ openFirstResult: true });
+      const run = await beginRun(['search'], { searches: 1, timeout: 60, closeTime: 5 });
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+
+      await startSearches(run.id, { searches: 1, timeout: 60, closeTime: 5 });
+
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+      await expect(mayOpenFirstResult(createdTabId)).resolves.toBe(true);
+    });
+
     // Regression: the content script navigated on the ?marAuto marker alone, so
     // any Bing page carrying it — a bookmark, a copied link, a tab left over
     // from an earlier round — left the results page. Only a tab this round
@@ -435,6 +626,46 @@ describe('searchRunner', () => {
       await requestStop();
 
       await expect(mayOpenFirstResult(7)).resolves.toBe(false);
+    });
+
+    // A turned-off search toggle ends the round as cancelled through
+    // finishSearch, and so does a sweep settling a stopped round: both revoke
+    // the grants, so a tab still sitting on its results page stays there.
+    it('refuses once the round was cancelled', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+      await startSearches(runId, { searches: 5, timeout: 60, closeTime: 5 });
+      await expect(mayOpenFirstResult(createdTabId)).resolves.toBe(true);
+
+      await finishSearch(runId, { status: 'cancelled', reason: '已关闭搜索' });
+
+      await expect(mayOpenFirstResult(createdTabId)).resolves.toBe(false);
+    });
+
+    // A manual stop ends the round without finishSearch, so it revokes the
+    // grants on its own.
+    it('refuses once the user stopped the round', async () => {
+      await seed({ openFirstResult: true });
+      const run = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+      await startSearches(run.id, { searches: 5, timeout: 60, closeTime: 5 });
+
+      await expect(stopRewards()).resolves.toEqual({ accepted: true });
+
+      await expect(mayOpenFirstResult(createdTabId)).resolves.toBe(false);
     });
 
     it('refuses when no round is running', async () => {

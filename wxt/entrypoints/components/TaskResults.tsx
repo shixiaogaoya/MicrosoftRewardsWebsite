@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
 import type { CommandReceipt, TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
 import Icon from './Icon';
@@ -58,6 +58,12 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
     // to. A task whose toggle was switched off after it ran is refused — told
     // so, not silently ignored, and never switched back on by the retry itself.
     const [rejection, setRejection] = useState<string | null>(null);
+    // The row is keyed by task kind, so a new round reuses this component with a
+    // fresh result object; the refusal the previous round's retry collected
+    // belongs to that round and must not resurface once running ends again.
+    useEffect(() => {
+        setRejection(null);
+    }, [result]);
     // The row's retry button is held while its receipt is in flight, so a
     // double click sends one command instead of a second one to be refused.
     const [pending, setPending] = useState(false);

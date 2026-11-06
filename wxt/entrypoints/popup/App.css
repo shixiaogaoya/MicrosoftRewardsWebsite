@@ -71,6 +71,17 @@ button, input, select {
     outline-offset: 2px;
 }
 
+/* A failed read leaves the defaults on screen and the controls disabled until
+   the retry lands the real values — show that state instead of letting the
+   controls look alive. */
+.switch:disabled,
+.preset-button:disabled,
+.tile:has(.tile-input:disabled),
+.input-shell:has(input:disabled) {
+    opacity: 0.5;
+    cursor: default;
+}
+
 .icon {
     display: block;
     width: var(--icon-small);

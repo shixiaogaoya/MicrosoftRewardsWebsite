@@ -28,9 +28,9 @@ describe('TaskResults retry', () => {
     host.remove();
   });
 
-  function render(results: TaskResults): void {
+  function render(results: TaskResults, isRunning = false): void {
     act(() => {
-      root.render(<TaskResultsList results={results} isRunning={false} />);
+      root.render(<TaskResultsList results={results} isRunning={isRunning} />);
     });
   }
 
@@ -88,5 +88,23 @@ describe('TaskResults retry', () => {
 
     expect(retryButton().disabled).toBe(false);
     expect(fakeBrowser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: the row keeps its state across rounds (it is keyed by task
+  // kind), so a refusal the previous round collected used to resurface the
+  // moment the new round's running state ended. A fresh result object drops it.
+  it('drops a stale refusal once a new round replaces the row result', async () => {
+    render({ daily: { status: 'failed', reason: '页面未能打开' } });
+    answeredWith({ accepted: false, reason: '该任务已关闭，请在设置中开启' });
+
+    await act(async () => {
+      retryButton().click();
+    });
+    expect(host.textContent).toContain('该任务已关闭，请在设置中开启');
+
+    render({ daily: { status: 'running' } }, true);
+    render({ daily: { status: 'completed' } }, false);
+
+    expect(host.textContent).not.toContain('该任务已关闭，请在设置中开启');
   });
 });

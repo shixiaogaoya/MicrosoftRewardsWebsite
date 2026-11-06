@@ -9,7 +9,7 @@ import { MIGRATION_KEY, STATE_MIGRATION_VERSION, type CommandReceipt, type RunCo
 import { openDailyRewards } from './dailyRewards';
 import { finishSearch, startSearches, stopSearches } from './searchRunner';
 import { clearTrackedTabs } from './tabCleanup';
-import { abandonRun, beginRun, currentRun, endRun, noteAttempt, readAttempts, recordResult, requestStop, settleUnresolved } from './taskRun';
+import { abandonRun, beginRun, currentRun, endRun, noteAttempt, readAttempts, recordResult, requestStop, revokeSearchGrants, settleUnresolved } from './taskRun';
 import { migrateRunState } from './stateMigration';
 
 const DAILY_CHECK_ALARM = 'dailyCheck';
@@ -108,8 +108,17 @@ export async function runRewards(options: RunOptions = {}): Promise<CommandRecei
     try {
         for (const kind of pending) await noteAttempt(kind, today);
     } catch {
-        await settleUnresolved(run.id, pending, { status: 'failed', reason: '未能记录任务尝试' });
-        for (const kind of pending) await endRun(run.id, kind);
+        // Each cleanup step runs on its own: a settling write that fails must not
+        // keep the flag reset or the end-of-run below from running, or the record
+        // this round just armed would block every later start. The refusal is
+        // returned whatever the cleanup managed to do.
+        await settleUnresolved(run.id, pending, { status: 'failed', reason: '未能记录任务尝试' }).catch(() => {});
+        // beginRun armed the search flag together with the round, so this refused
+        // start has to clear it through the same reset every other search ending
+        // uses — otherwise the popup keeps claiming a search is in flight until
+        // the next round overwrites the progress.
+        await stopSearches().catch(() => {});
+        for (const kind of pending) await endRun(run.id, kind).catch(() => {});
         return { accepted: false, reason: '任务启动失败，请重试' };
     }
 
@@ -167,6 +176,9 @@ export async function stopRewards(): Promise<CommandReceipt> {
     const started: TaskKind[] = (['search', 'daily', 'claim'] as const).filter((kind) => run[kind]);
     const cancelled: TaskResult = { status: 'cancelled', reason: '已停止' };
     await settleUnresolved(runId, started, cancelled);
+    // A stopped round's tabs must not leave the results page afterwards, so
+    // the stop revokes the navigation grants this round handed out.
+    await revokeSearchGrants(runId);
     // Search has no page of its own left to close: stopSearches already dropped
     // the alarm and the short timer, and each search tab closes itself. The
     // dashboard record stays. finish() in the dashboard visit still holds this

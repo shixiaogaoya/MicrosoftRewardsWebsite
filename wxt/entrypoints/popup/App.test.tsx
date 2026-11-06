@@ -2,7 +2,7 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import App from '@/entrypoints/popup/App';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
@@ -64,5 +64,88 @@ describe('App 设置视图的文案', () => {
         const notes = Array.from(host.querySelectorAll('.field-note'));
         const note = notes.find((el) => (el.textContent ?? '').includes('首个结果'));
         expect(note?.textContent ?? '').toContain('跳转到首个结果所在的网站');
+    });
+});
+
+// A failed first read leaves the defaults on screen while the hook holds every
+// write back until its read lands, so an edit made in that window would only
+// change the screen and be silently replaced by the retry. The settings
+// controls are therefore disabled until the re-read brings the real values in.
+describe('App 设置读取失败时禁用编辑控件', () => {
+    let host: HTMLDivElement;
+    let root: Root;
+
+    beforeEach(async () => {
+        fakeBrowser.reset();
+        // A stored value the retry should surface once reads work again.
+        await setStorageItem('timeout', 5, StorageValues.SYNC);
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        root = createRoot(host);
+    });
+
+    afterEach(() => {
+        act(() => root.unmount());
+        host.remove();
+        vi.restoreAllMocks();
+    });
+
+    async function tick(): Promise<void> {
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+    }
+
+    async function openSettings(): Promise<void> {
+        await tick();
+        act(() => {
+            const advanced = host.querySelector<HTMLButtonElement>('.advanced-row');
+            if (advanced) advanced.click();
+        });
+        for (let i = 0; i < 20; i++) {
+            if (host.querySelector('#searches')) return;
+            await tick();
+        }
+    }
+
+    it('读取失败期间开关、任务块、预设与数字输入全部禁用，且重读成功后恢复', async () => {
+        // Every settings read fails, so all bindings sit in loadState 'error'.
+        const get = fakeBrowser.storage.sync.get.bind(fakeBrowser.storage.sync);
+        const failing = vi.spyOn(fakeBrowser.storage.sync, 'get').mockRejectedValue(new Error('read failed'));
+
+        await act(async () => {
+            root.render(<App />);
+        });
+        await openSettings();
+
+        const switchInput = host.querySelector<HTMLInputElement>('#autoRunEnabled');
+        expect(switchInput?.disabled).toBe(true);
+        for (const id of ['autoCheckbox', 'autoDaily', 'claimPoints', 'openFirstResult']) {
+            expect(host.querySelector<HTMLInputElement>(`#${id}`)?.disabled).toBe(true);
+        }
+        for (const id of ['searches', 'timeout', 'closeTime']) {
+            expect(host.querySelector<HTMLInputElement>(`#${id}`)?.disabled).toBe(true);
+        }
+        const presets = Array.from(host.querySelectorAll<HTMLButtonElement>('.preset-button'));
+        expect(presets).toHaveLength(3);
+        expect(presets.every((button) => button.disabled)).toBe(true);
+        // The way out stays available: the failed read carries its own retry.
+        const retry = Array.from(host.querySelectorAll<HTMLButtonElement>('.save-retry'))
+            .find((button) => button.textContent === '重新读取');
+        expect(retry).toBeDefined();
+
+        // Reads work again: the retry re-enables the controls with the stored
+        // values, not the defaults that were showing during the failure.
+        failing.mockImplementation(async (keys) => get(keys as Parameters<typeof get>[0]));
+        act(() => retry!.click());
+        for (let i = 0; i < 20; i++) {
+            const timeout = host.querySelector<HTMLInputElement>('#timeout');
+            if (timeout && !timeout.disabled && timeout.value === '5') break;
+            await tick();
+        }
+        const recovered = host.querySelector<HTMLInputElement>('#timeout');
+        expect(recovered?.disabled).toBe(false);
+        expect(recovered?.value).toBe('5');
+        expect(host.querySelector<HTMLInputElement>('#autoRunEnabled')?.disabled).toBe(false);
     });
 });

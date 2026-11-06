@@ -123,6 +123,31 @@ describe('runRewards', () => {
       search: { status: 'failed' },
       daily: { status: 'failed' },
     });
+    // Regression: beginRun arms the search flag together with the round, so a
+    // start refused over its attempt write left `isSearching` on and the popup
+    // claiming a search was in flight until the next round overwrote it.
+    expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+  });
+
+  // Regression: the refusal cleanup ran as one chain, so a settling write that
+  // itself failed kept the flag reset and endRun from running, and the armed
+  // record then blocked every later start. Each step now runs on its own.
+  it('still ends the armed round when the refusal cleanup itself fails', async () => {
+    await seed({});
+    const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+      const keys = Object.keys(items ?? {});
+      // beginRun batches the results in with the run's other keys; only the
+      // attempt write and the settling write are alone, so only those fail.
+      const lone = keys.length === 1 && (keys[0].includes('taskAttempts') || keys[0].includes('taskResults'));
+      if (lone) throw new Error('write failed');
+      await set(items);
+    });
+
+    await expect(runRewards()).resolves.toEqual({ accepted: false, reason: '任务启动失败，请重试' });
+
+    expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
   });
 

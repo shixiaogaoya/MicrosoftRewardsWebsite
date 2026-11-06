@@ -9,12 +9,15 @@ interface NumberInputProps {
     hint: string;
     unit: string;
     onChange: (value: number) => void;
+    // While the stored value could not be read, the shown number is the default,
+    // not the user's setting — an edit made then would never reach storage.
+    disabled?: boolean;
 }
 
 // The box may be emptied while the user is typing. That draft is not a setting:
 // only a whole number inside the range is written, and an invalid draft is
 // replaced by the last saved value when the field loses focus.
-function NumberInput({ id, label, kind, value, hint, unit, onChange }: NumberInputProps) {
+function NumberInput({ id, label, kind, value, hint, unit, onChange, disabled }: NumberInputProps) {
     const [draft, setDraft] = useState(String(value));
     const [invalid, setInvalid] = useState(false);
 
@@ -42,6 +45,7 @@ function NumberInput({ id, label, kind, value, hint, unit, onChange }: NumberInp
                     type="text"
                     inputMode="numeric"
                     id={id}
+                    disabled={disabled}
                     aria-invalid={invalid}
                     aria-describedby={invalid ? `${id}-hint` : undefined}
                     value={draft}

@@ -9,13 +9,18 @@ interface ManualClaimButtonProps {
     canStart: boolean;
     disabled: boolean;
     onStop: () => void;
+    // Called when a stop request came back refused or unanswered: the caller
+    // holds its own "stop requested" mark from onStop and must unroll it, or the
+    // button stays on "正在停止" while the round is still running and no stop
+    // was actually delivered.
+    onStopFailed?: () => void;
 }
 
 // Starts the selected tasks, or stops the round that is running. The background
 // owns that state, so this button only sends the request. Auto-run being off
 // does not disable it: that switch only stops the alarm and startup from
 // starting a round on their own.
-function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }: ManualClaimButtonProps) {
+function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop, onStopFailed }: ManualClaimButtonProps) {
     // The background answers with a receipt. A refusal — a start that found a
     // round already running, a stop with nothing left to stop — is shown next
     // to the button, so the click is explained instead of silently ignored.
@@ -27,7 +32,12 @@ function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }
     // matters for starting: starting runs on the values on screen. Stopping
     // sends no values, so a running round keeps the button available unless its
     // stop request is already in flight.
-    const blocked = pending || (isRunning ? isStopping : disabled || !canStart);
+    //
+    // `pending` holds the start entry only. The background records the run
+    // before the first search step answers its receipt, so the popup can show a
+    // running round while the start's receipt is still in flight — holding the
+    // stop through that gap left no way to stop a stuck first round.
+    const blocked = isRunning ? isStopping : pending || disabled || !canStart;
     async function handleClick() {
         if (blocked) return;
         setRejection(null);
@@ -35,9 +45,13 @@ function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }
         if (isRunning) onStop();
         try {
             const receipt = await browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' }) as CommandReceipt | undefined;
-            if (receipt && !receipt.accepted) setRejection(receipt.reason);
+            if (receipt && !receipt.accepted) {
+                setRejection(receipt.reason);
+                if (isRunning) onStopFailed?.();
+            }
         } catch {
             setRejection('未收到后台响应，请重试');
+            if (isRunning) onStopFailed?.();
         } finally {
             setPending(false);
         }

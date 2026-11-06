@@ -15,6 +15,7 @@ describe('ManualClaimButton pending', () => {
   let host: HTMLDivElement;
   let root: Root;
   let stopped: number;
+  let stopUnrolled: number;
 
   beforeEach(() => {
     fakeBrowser.reset();
@@ -23,6 +24,7 @@ describe('ManualClaimButton pending', () => {
     document.body.appendChild(host);
     root = createRoot(host);
     stopped = 0;
+    stopUnrolled = 0;
   });
 
   afterEach(() => {
@@ -41,6 +43,7 @@ describe('ManualClaimButton pending', () => {
         <ManualClaimButton
           {...props}
           onStop={() => { stopped += 1; }}
+          onStopFailed={() => { stopUnrolled += 1; }}
         />
       );
     });
@@ -84,5 +87,73 @@ describe('ManualClaimButton pending', () => {
 
     expect(button().disabled).toBe(false);
     expect(host.textContent).toContain('已有任务运行中');
+  });
+
+  // Regression: the start receipt only arrives once the first search step has
+  // finished, but the run record exists before it — so the popup can already be
+  // showing a running round while the start's receipt is still pending. Holding
+  // the stop through that gap left no way to stop a stuck first round.
+  it('keeps the stop button available while a start receipt is still in flight', async () => {
+    render({ isRunning: false, isStopping: false, canStart: true, disabled: false });
+    let answer!: (receipt: CommandReceipt) => void;
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockReturnValue(
+      new Promise<CommandReceipt>((resolve) => { answer = resolve; }) as never
+    );
+
+    await act(async () => {
+      button().click();
+    });
+    expect(button().disabled).toBe(true);
+
+    // The background has recorded the run; the popup re-renders with it running.
+    render({ isRunning: true, isStopping: false, canStart: true, disabled: false });
+
+    expect(button().disabled).toBe(false);
+    expect(button().textContent).toContain('停止任务');
+
+    await act(async () => {
+      answer({ accepted: true });
+    });
+  });
+
+  // Regression: onStop marks the round as stop-requested, and that mark was
+  // only cleared when the round ended. A stop that was refused or never
+  // answered while the round kept running left the button stuck on "正在停止"
+  // — the unroll callback lets the caller take the mark back and try again.
+  it('unrolls the stop request when the answer never arrives', async () => {
+    render({ isRunning: true, isStopping: false, canStart: true, disabled: false });
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockRejectedValue(new Error('no listener') as never);
+
+    await act(async () => {
+      button().click();
+    });
+
+    expect(stopped).toBe(1);
+    expect(stopUnrolled).toBe(1);
+    expect(host.textContent).toContain('未收到后台响应，请重试');
+  });
+
+  it('unrolls the stop request when the stop is refused', async () => {
+    render({ isRunning: true, isStopping: false, canStart: true, disabled: false });
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockResolvedValue({ accepted: false, reason: '当前没有运行中的任务' } as never);
+
+    await act(async () => {
+      button().click();
+    });
+
+    expect(stopped).toBe(1);
+    expect(stopUnrolled).toBe(1);
+  });
+
+  it('does not unroll a stop that was accepted', async () => {
+    render({ isRunning: true, isStopping: false, canStart: true, disabled: false });
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockResolvedValue({ accepted: true } as never);
+
+    await act(async () => {
+      button().click();
+    });
+
+    expect(stopped).toBe(1);
+    expect(stopUnrolled).toBe(0);
   });
 });

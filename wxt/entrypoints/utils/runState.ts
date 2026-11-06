@@ -91,6 +91,8 @@ export const CONFIG_KEY = 'taskConfig';
 export const PROGRESS_KEY = 'taskProgress';
 export const RESULTS_KEY = 'taskResults';
 export const ATTEMPTS_KEY = 'taskAttempts';
+// Navigation grants for the search tabs a round opened, keyed by tab id.
+export const SEARCH_GRANTS_KEY = 'searchTabGrants';
 export const MIGRATION_KEY = 'stateMigrationVersion';
 export const LAST_RUN_KEY = 'taskLastRunId';
 
