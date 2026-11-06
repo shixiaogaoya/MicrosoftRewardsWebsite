@@ -260,7 +260,14 @@ export function noteSearchDeadline(runId: number, deadline: number): Promise<voi
 export function noteSearchTab(runId: number, tabId: number): Promise<void> {
     return enqueue(async () => {
         const state = await read();
-        if (!state || state.id !== runId) return;
+        // A stopping round refuses the naming — the same guard claimStep and
+        // writeProgressIfRunning use. A tab can be created while the round was
+        // still running but named only after a stop landed, past the stop's own
+        // revocation; the grant it would gain must not outlive the record as a
+        // leftover the ask would honour long after the stop. The unnamed tab
+        // is harmless: without a grant its ask is refused, and the tab itself
+        // is still registered for the durable sweep.
+        if (!state || state.id !== runId || state.phase !== 'running') return;
         if (state.searchTabIds?.includes(tabId)) return;
         await write({ ...state, searchTabIds: [...(state.searchTabIds ?? []), tabId] });
         const grants = await readSearchGrants();

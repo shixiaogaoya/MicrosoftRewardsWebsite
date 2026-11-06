@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { finishSearch, handleAlarmStep, mayOpenFirstResult, startSearches, stopSearches } from './searchRunner';
 import { stopRewards } from './dailySchedule';
-import { beginRun, endRun, noteSearchTab, requestStop } from './taskRun';
+import { beginRun, endRun, noteSearchTab, readSearchGrants, requestStop } from './taskRun';
 import { FIRST_RESULT_NAV_WINDOW_MS } from '@/entrypoints/utils/firstResult';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
@@ -625,6 +625,26 @@ describe('searchRunner', () => {
       await noteSearchTab(runId, 7);
       await requestStop();
 
+      await expect(mayOpenFirstResult(7)).resolves.toBe(false);
+    });
+
+    // Regression: a tab created while the round ran could be named only after a
+    // stop landed — and past the stop's own revocation, which still had nothing
+    // to clear. The grant that late naming wrote then outlived the dropped
+    // record, and the ask was honoured long after the stop. A stopping round
+    // now refuses the naming, the same guard claimStep and
+    // writeProgressIfRunning use.
+    it('leaves no grant for a tab named after the round was stopped', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      await requestStop();
+      // The naming arrives after the stop, like a tab whose create outlived
+      // the stop click; the round's own revocation has already run.
+      await noteSearchTab(runId, 7);
+      await endRun(runId, 'search');
+
+      expect(await readSearchGrants()).toEqual({});
+      // The record is gone, so only the (absent) grant could have allowed it.
       await expect(mayOpenFirstResult(7)).resolves.toBe(false);
     });
 
