@@ -19,6 +19,11 @@ export interface TaskResult {
     reason?: string;
 }
 
+// What the background answers a start, a stop or a single-task retry with.
+// `reason` is set on every refusal, in the popup's own wording, so a click that
+// did nothing is explained instead of silently ignored.
+export type CommandReceipt = { accepted: true } | { accepted: false; reason: string };
+
 export interface TaskRunState {
     id: number;
     phase: RunPhase;
@@ -41,6 +46,12 @@ export interface TaskRunState {
     // opening a tab and arming the next step would never be settled and would
     // block every later start.
     searchDeadline?: number;
+    // The search tabs this round opened, recorded as each is created. The
+    // bing-result content script asks before navigating to the first organic
+    // result; only a tab named here counts as this round's own, so a page that
+    // merely carries the ?marAuto marker (a bookmark, a copied link, a leftover
+    // tab from an earlier round) is refused.
+    searchTabIds?: number[];
 }
 
 // Frozen when the round starts. Editing the search count, the gap or the close
@@ -80,6 +91,8 @@ export const CONFIG_KEY = 'taskConfig';
 export const PROGRESS_KEY = 'taskProgress';
 export const RESULTS_KEY = 'taskResults';
 export const ATTEMPTS_KEY = 'taskAttempts';
+// Navigation grants for the search tabs a round opened, keyed by tab id.
+export const SEARCH_GRANTS_KEY = 'searchTabGrants';
 export const MIGRATION_KEY = 'stateMigrationVersion';
 export const LAST_RUN_KEY = 'taskLastRunId';
 

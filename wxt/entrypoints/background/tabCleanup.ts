@@ -3,6 +3,7 @@ import { getStorageItem, setStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { DASHBOARD_MAX_LIFETIME_MS, RUN_KEY, type TaskRunState } from '@/entrypoints/utils/runState';
 import { endRun, recordResult } from './taskRun';
+import { finishSearch } from './searchRunner';
 
 // Tab ids the extension opened, each mapped to the wall-clock time by which it
 // must be gone.
@@ -106,12 +107,13 @@ async function settleDashboardIfGone(): Promise<void> {
             await endRun(run.id, kind);
         }
     }
+    // The search half ends through the same end step as every other ending, so
+    // the sweep also clears the search flag, the badge and the alarms a round
+    // abandoned mid-flight left behind — not just the result and the record.
     if (stoppingSearch) {
-        await recordResult(run.id, 'search', cancelled);
-        await endRun(run.id, 'search');
+        await finishSearch(run.id, cancelled);
     } else if (abandonedSearch) {
-        await recordResult(run.id, 'search', { status: 'unconfirmed', reason: '后台中断，未能确认本轮搜索' });
-        await endRun(run.id, 'search');
+        await finishSearch(run.id, { status: 'unconfirmed', reason: '后台中断，未能确认本轮搜索' });
     }
 }
 
@@ -166,7 +168,10 @@ function enqueue(operation: () => Promise<void>): Promise<void> {
 // registered while a sweep is already armed must leave the existing schedule alone.
 async function ensureSweepAlarm(): Promise<void> {
     if (await browser.alarms.get(CLEANUP_ALARM)) return;
-    browser.alarms.create(CLEANUP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
+    // Awaited: the caller has just written a tab into the registry on the
+    // promise that this alarm will sweep it, so a create that never settled
+    // must fail that caller instead of reporting the sweep as armed.
+    await browser.alarms.create(CLEANUP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
 }
 
 async function readRegistry(): Promise<TrackedTabs> {

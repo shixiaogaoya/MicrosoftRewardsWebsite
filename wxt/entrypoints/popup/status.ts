@@ -1,4 +1,4 @@
-import type { SaveState } from '@/entrypoints/hooks/useStorage';
+import type { LoadState, SaveState } from '@/entrypoints/hooks/useStorage';
 import type { TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
 
 export type StatusTone = 'idle' | 'busy' | 'attention' | 'done';
@@ -59,6 +59,15 @@ export function combinedSave(states: SaveState[]): SaveState {
     if (states.includes('saving')) return 'saving';
     if (states.includes('saved')) return 'saved';
     return 'idle';
+}
+
+// Same precedence as combinedSave: a failed read is shown even while another
+// one is still on its way, and every read must have finished before the
+// settings count as loaded.
+export function combinedLoad(states: LoadState[]): LoadState {
+    if (states.includes('error')) return 'error';
+    if (states.includes('loading')) return 'loading';
+    return 'loaded';
 }
 
 // Idle summary of the next round. Search count and gap belong to the search

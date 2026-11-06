@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
-import type { TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
+import type { CommandReceipt, TaskKind, TaskResult, TaskResults, TaskStatus } from '@/entrypoints/utils/runState';
 import Icon from './Icon';
 
 const LABELS: Record<TaskKind, string> = {
@@ -53,8 +54,34 @@ function TaskResultsList({ results, isRunning }: TaskResultsProps) {
 }
 
 function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResult; isRunning: boolean }) {
+    // The retry asks the background and shows its answer on the row it belongs
+    // to. A task whose toggle was switched off after it ran is refused — told
+    // so, not silently ignored, and never switched back on by the retry itself.
+    const [rejection, setRejection] = useState<string | null>(null);
+    // The row is keyed by task kind, so a new round reuses this component with a
+    // fresh result object; the refusal the previous round's retry collected
+    // belongs to that round and must not resurface once running ends again.
+    useEffect(() => {
+        setRejection(null);
+    }, [result]);
+    // The row's retry button is held while its receipt is in flight, so a
+    // double click sends one command instead of a second one to be refused.
+    const [pending, setPending] = useState(false);
     const canRetry = !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
     const tone = TONE[result.status];
+    async function retryTask(): Promise<void> {
+        if (pending) return;
+        setRejection(null);
+        setPending(true);
+        try {
+            const receipt = await browser.runtime.sendMessage({ action: 'popup', only: [kind] }) as CommandReceipt | undefined;
+            if (receipt && !receipt.accepted) setRejection(receipt.reason);
+        } catch {
+            setRejection('未收到后台响应，请重试');
+        } finally {
+            setPending(false);
+        }
+    }
     return (
         <li className="task-item">
             <span className={`task-indicator task-indicator--${result.status === 'failed' ? 'error' : tone}`} aria-hidden="true">
@@ -66,20 +93,17 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
                     <span className="task-actions">
                         <span className={`task-status task-status--${result.status === 'failed' ? 'error' : tone}`}>{STATUS_TEXT[result.status]}</span>
                         {canRetry && (
-                            <button type="button" className="task-retry" onClick={() => retry(kind)} aria-label={`重试${LABELS[kind]}`}>
+                            <button type="button" className="task-retry" onClick={retryTask} disabled={pending} aria-disabled={pending} aria-label={`重试${LABELS[kind]}`}>
                                 <Icon name="rotate-ccw" />
                             </button>
                         )}
                     </span>
                 </div>
                 {result.reason && <p className="task-reason">{result.reason}</p>}
+                {rejection && !isRunning && <p className="task-reason" role="status">{rejection}</p>}
             </div>
         </li>
     );
-}
-
-function retry(kind: TaskKind): void {
-    browser.runtime.sendMessage({ action: 'popup', only: [kind] });
 }
 
 export default TaskResultsList;

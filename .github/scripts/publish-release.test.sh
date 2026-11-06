@@ -5,6 +5,22 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-release.sh"
 export FIXTURE_JQ="$(command -v jq)"
+# Linux images ship only python3, while a Windows Git Bash usually exposes only
+# `python`. A Git Bash `python3` can also be the Microsoft Store placeholder,
+# which `command -v` finds but cannot run, so each candidate is verified before
+# it is chosen.
+PYTHON=""
+for candidate in python3 python; do
+  found="$(command -v "$candidate" 2>/dev/null)" || continue
+  "$found" -c 'import sys' >/dev/null 2>&1 || continue
+  PYTHON="$found"
+  break
+done
+if [[ -z "$PYTHON" ]]; then
+  echo "no runnable python3 or python found" >&2
+  exit 1
+fi
+export PYTHON
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -16,7 +32,7 @@ EOF
 make_zip() {
   local version="$1"
   local zip="$2"
-  python - "$version" "$zip" <<'PY'
+  "$PYTHON" - "$version" "$zip" <<'PY'
 import json, sys, zipfile
 version, path = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:
@@ -27,10 +43,27 @@ PY
 make_zip "3.1.3" "$work/repo/artifacts/extension-chrome/rewards-3.1.3-chrome.zip"
 make_zip "3.1.3" "$work/repo/artifacts/extension-firefox/rewards-3.1.3-firefox.zip"
 
-cat > "$work/bin/jq" <<'EOF'
+# Prefer the host jq; when the host has none (a bare WSL or Git Bash often
+# ships without it, and the local gates run there), fall back to the checked-in
+# python implementation of exactly the expressions the script under test uses.
+cat > "$work/bin/jq" <<EOF
 #!/usr/bin/env bash
 set -o pipefail
-"$FIXTURE_JQ" "$@" | tr -d '\r'
+if [[ -n "\${FIXTURE_JQ:-}" ]]; then
+  "\$FIXTURE_JQ" "\$@" | tr -d '\r'
+else
+  "\$PYTHON" "$root/.github/scripts/jq-fallback.py" "\$@" | tr -d '\r'
+fi
+EOF
+
+# The script under test reads the manifest version through a bare `python`
+# heredoc, and the interpreter chosen above may answer only to python3. A shim
+# in the same bin the gh/jq stubs live in — the PATH prefix the fixtures already
+# use to intercept gh — answers that name, so the fixtures and the script run
+# the same one.
+cat > "$work/bin/python" <<EOF
+#!/usr/bin/env bash
+exec "$PYTHON" "\$@"
 EOF
 
 cat > "$work/bin/gh" <<'EOF'
@@ -144,7 +177,7 @@ echo "unexpected git invocation: $*" >&2
 exit 1
 EOF
 
-chmod +x "$work/bin/jq" "$work/bin/gh" "$work/bin/git"
+chmod +x "$work/bin/jq" "$work/bin/gh" "$work/bin/git" "$work/bin/python"
 
 run_case() {
   local name="$1"
@@ -337,7 +370,7 @@ run_case raced-publish skip v3.1.3
 # A wrong manifest version must fail before any tag or release is considered.
 prepare_absent bad-manifest
 run_case bad-manifest fail '' \
-  bash -c 'python - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
 import json, sys, zipfile
 path, payload = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:

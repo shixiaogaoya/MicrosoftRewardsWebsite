@@ -94,11 +94,60 @@ describe('runRewards', () => {
     });
     await seed({ autoDaily: false });
 
-    await expect(runRewards()).resolves.toBeUndefined();
+    await expect(runRewards()).resolves.toEqual({ accepted: true });
     await flushPendingWork();
 
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
     expect(results?.search?.status).toBe('failed');
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+  });
+
+  // Regression: the attempt writes came after beginRun with nothing around
+  // them. One rejecting write let runRewards itself reject, so the message
+  // handler answered a generic refusal while the run record and its `running`
+  // results stayed behind, blocking every later start.
+  it('settles the armed round and refuses when recording an attempt fails', async () => {
+    await seed({});
+    const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+      if (Object.keys(items ?? {}).some((key) => key.includes('taskAttempts'))) {
+        throw new Error('attempts write failed');
+      }
+      await set(items);
+    });
+
+    await expect(runRewards()).resolves.toEqual({ accepted: false, reason: '任务启动失败，请重试' });
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results).toMatchObject({
+      search: { status: 'failed' },
+      daily: { status: 'failed' },
+    });
+    // Regression: beginRun arms the search flag together with the round, so a
+    // start refused over its attempt write left `isSearching` on and the popup
+    // claiming a search was in flight until the next round overwrote it.
+    expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+  });
+
+  // Regression: the refusal cleanup ran as one chain, so a settling write that
+  // itself failed kept the flag reset and endRun from running, and the armed
+  // record then blocked every later start. Each step now runs on its own.
+  it('still ends the armed round when the refusal cleanup itself fails', async () => {
+    await seed({});
+    const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+      const keys = Object.keys(items ?? {});
+      // beginRun batches the results in with the run's other keys; only the
+      // attempt write and the settling write are alone, so only those fail.
+      const lone = keys.length === 1 && (keys[0].includes('taskAttempts') || keys[0].includes('taskResults'));
+      if (lone) throw new Error('write failed');
+      await set(items);
+    });
+
+    await expect(runRewards()).resolves.toEqual({ accepted: false, reason: '任务启动失败，请重试' });
+
+    expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
   });
 
@@ -184,6 +233,55 @@ describe('runRewards', () => {
     await flushPendingWork();
 
     expect(urls).toEqual([]);
+  });
+
+  // Regression: a refused command used to return silently, so a retry of a task
+  // that had been switched off did nothing with no explanation — and a start
+  // that overlapped another round was dropped the same way.
+  it('refuses a retry whose task is switched off, without re-enabling it', async () => {
+    const urls = trackCreatedTabs();
+    await seed({ autoDaily: false, claimPoints: false });
+
+    await expect(runRewards({ manual: true, only: ['daily'] })).resolves.toEqual({
+      accepted: false,
+      reason: '该任务已关闭，请在设置中开启',
+    });
+    await flushPendingWork();
+
+    expect(urls).toEqual([]);
+    expect(await getStorageItem<boolean>('autoDaily', StorageValues.SYNC)).toBe(false);
+  });
+
+  it('refuses a start while another round is still running', async () => {
+    trackCreatedTabs();
+    await seed({ active: false, autoDaily: false, claimPoints: true });
+    await beginRun(['claim'], { searches: 5, timeout: 60, closeTime: 5 });
+
+    await expect(runRewards({ manual: true, only: ['claim'] })).resolves.toEqual({
+      accepted: false,
+      reason: '已有任务运行中',
+    });
+  });
+
+  it('refuses a start when the settings cannot be read', async () => {
+    const urls = trackCreatedTabs();
+    await seed({});
+    vi.spyOn(fakeBrowser.storage.sync, 'get').mockRejectedValue(new Error('sync storage unavailable'));
+
+    await expect(runRewards({ manual: true })).resolves.toEqual({
+      accepted: false,
+      reason: '设置读取失败，请重试',
+    });
+    await flushPendingWork();
+
+    expect(urls).toEqual([]);
+  });
+
+  it('refuses a stop when nothing is running', async () => {
+    await expect(stopRewards()).resolves.toEqual({
+      accepted: false,
+      reason: '当前没有运行中的任务',
+    });
   });
 });
 

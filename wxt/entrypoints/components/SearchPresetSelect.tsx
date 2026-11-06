@@ -3,11 +3,14 @@ import { SEARCH_PRESETS, matchingSearchPreset } from '@/entrypoints/utils/settin
 interface SearchPresetSelectProps {
     searches: number;
     onSelect: (searches: number) => void;
+    // While the stored value could not be read, the shown count is the default,
+    // not the user's setting — a preset picked then would never reach storage.
+    disabled?: boolean;
 }
 
 // Shortcuts for the search count. The number field stays the source of truth:
 // a count that matches a button highlights it, and any other count reads as custom.
-function SearchPresetSelect({ searches, onSelect }: SearchPresetSelectProps) {
+function SearchPresetSelect({ searches, onSelect, disabled }: SearchPresetSelectProps) {
     const matched = matchingSearchPreset(searches);
     return (
         <div className="preset-row">
@@ -19,6 +22,7 @@ function SearchPresetSelect({ searches, onSelect }: SearchPresetSelectProps) {
                         type="button"
                         className={`preset-button${matched === count ? ' preset-button--on' : ''}`}
                         aria-pressed={matched === count}
+                        disabled={disabled}
                         onClick={() => onSelect(count)}
                     >
                         {count} 次

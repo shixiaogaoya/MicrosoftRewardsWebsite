@@ -4,7 +4,7 @@ import { fakeBrowser } from 'wxt/testing';
 import { clearTrackedTabs, isCleanupAlarm, sweepStaleTabs, trackTab, untrackTab } from './tabCleanup';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
-import { RESULTS_KEY, RUN_KEY, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
+import { PROGRESS_KEY, RESULTS_KEY, RUN_KEY, type RunProgress, type TaskResults, type TaskRunState } from '@/entrypoints/utils/runState';
 
 const CLEANUP_ALARM = 'closeStaleTabs';
 
@@ -140,6 +140,30 @@ describe('tabCleanup', () => {
 
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.search?.status).toBe('unconfirmed');
+  });
+
+  // Regression: the sweep used to end the record and the result but leave the
+  // search flag up and the round's step alarm armed, so the popup kept claiming
+  // a search was in flight and the alarm kept waking the worker for a round
+  // that no longer existed.
+  it('clears the search flag and step alarms when settling an abandoned search round', async () => {
+    await setStorageItems({
+      [RUN_KEY]: {
+        id: 20, phase: 'running', search: true, daily: false, claim: false,
+        startedAt: Date.now(), searchDeadline: Date.now() - 1000,
+      },
+      [RESULTS_KEY]: { search: { status: 'running' } },
+      [PROGRESS_KEY]: { opened: 2, total: 5, isSearching: true },
+    }, StorageValues.LOCAL);
+    fakeBrowser.alarms.create('openTabAlarm:20:3', { delayInMinutes: 1 });
+
+    vi.setSystemTime(new Date('2026-08-21T10:05:00Z'));
+    await sweepStaleTabs();
+
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+    expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.search?.status).toBe('unconfirmed');
+    expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+    expect(await fakeBrowser.alarms.get('openTabAlarm:20:3')).toBeUndefined();
   });
 
   // The step is still due, so the round is waiting rather than abandoned.

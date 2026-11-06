@@ -28,17 +28,19 @@ describe('useStorage hook', () => {
   }
 
   function NumberField({ storageKey, fallback }: { storageKey: string; fallback: number }) {
-    const { value, setValue, saveState, retrySave } = useStorage<number>(storageKey, fallback, StorageValues.SYNC);
+    const { value, setValue, saveState, retrySave, loadState, retryLoad } = useStorage<number>(storageKey, fallback, StorageValues.SYNC);
     return (
       <div>
         <input
           type="text"
           aria-label={storageKey}
           data-save={saveState}
+          data-load={loadState}
           value={String(value)}
           onChange={(event) => setValue(Number(event.target.value))}
         />
         <button type="button" onClick={retrySave}>重试保存</button>
+        <button type="button" onClick={retryLoad}>重新读取</button>
       </div>
     );
   }
@@ -192,6 +194,113 @@ describe('useStorage hook', () => {
       await flush();
       expect(control().dataset.save).toBe('saved');
       expect(await getStorageItem<number>('searches', StorageValues.SYNC)).toBe(30);
+    } finally {
+      fakeBrowser.storage.sync.set = setItem;
+    }
+  });
+
+  it('reports a failed first read and recovers through the retry button', async () => {
+    await setStorageItem('searches', 30, StorageValues.SYNC);
+    const getItem = fakeBrowser.storage.sync.get.bind(fakeBrowser.storage.sync);
+    fakeBrowser.storage.sync.get = () => Promise.reject(new Error('read failed'));
+    try {
+      await act(async () => {
+        root.render(<NumberField storageKey="searches" fallback={5} />);
+      });
+      await flush();
+      expect(control().dataset.load).toBe('error');
+      // The default stays on screen; it was never read, so it is not a value a
+      // round may run on.
+      expect(control().value).toBe('5');
+    } finally {
+      fakeBrowser.storage.sync.get = getItem;
+    }
+    expect(await getStorageItem<number>('searches', StorageValues.SYNC)).toBe(30);
+
+    await act(async () => {
+      host.querySelectorAll('button')[1]?.click();
+    });
+    await flush();
+    expect(control().dataset.load).toBe('loaded');
+    expect(control().value).toBe('30');
+  });
+
+  it('adopts an external change once no local edit is pending, without echoing a write', async () => {
+    let writes = 0;
+    const setItem = fakeBrowser.storage.sync.set.bind(fakeBrowser.storage.sync);
+    fakeBrowser.storage.sync.set = (items) => {
+      writes += 1;
+      return setItem(items);
+    };
+    try {
+      await act(async () => {
+        root.render(<NumberField storageKey="timeout" fallback={60} />);
+      });
+      await flush();
+      expect(control().value).toBe('60');
+
+      await act(async () => {
+        await fakeBrowser.storage.sync.set({ timeout: 90 });
+      });
+      await flush();
+      expect(control().value).toBe('90');
+      // Only the external write itself: adopting must not write the value back.
+      expect(writes).toBe(1);
+    } finally {
+      fakeBrowser.storage.sync.set = setItem;
+    }
+  });
+
+  it('keeps writing after the echo of its own saved value arrives', async () => {
+    await setStorageItem('searches', 30, StorageValues.SYNC);
+    await act(async () => {
+      root.render(<NumberField storageKey="searches" fallback={5} />);
+    });
+    await flush();
+    expect(control().value).toBe('30');
+
+    await act(async () => setText('35'));
+    await flush();
+    expect(control().dataset.save).toBe('saved');
+
+    // A real browser delivers the onChanged broadcast after the write's
+    // promise resolves; the fake fires it before. Trigger the event again to
+    // replay that order — an echo whose value is the one already on screen.
+    await act(async () => {
+      await fakeBrowser.storage.sync.onChanged.trigger({
+        searches: { oldValue: 30, newValue: 35 },
+      });
+    });
+    await flush();
+
+    await act(async () => setText('40'));
+    await flush();
+    expect(control().dataset.save).toBe('saved');
+    expect(await getStorageItem<number>('searches', StorageValues.SYNC)).toBe(40);
+  });
+
+  it('keeps a local draft over an external change while its write failed', async () => {
+    await setStorageItem('searches', 5, StorageValues.SYNC);
+    await act(async () => {
+      root.render(<NumberField storageKey="searches" fallback={5} />);
+    });
+    await flush();
+
+    const setItem = fakeBrowser.storage.sync.set.bind(fakeBrowser.storage.sync);
+    fakeBrowser.storage.sync.set = () => Promise.reject(new Error('quota'));
+    try {
+      await act(async () => setText('10'));
+      await flush();
+      expect(control().dataset.save).toBe('error');
+
+      fakeBrowser.storage.sync.set = setItem;
+      await act(async () => {
+        await setItem({ searches: 40 });
+      });
+      await flush();
+      // The failed draft stays on screen; the external value does not replace it.
+      expect(control().value).toBe('10');
+      expect(control().dataset.save).toBe('error');
     } finally {
       fakeBrowser.storage.sync.set = setItem;
     }

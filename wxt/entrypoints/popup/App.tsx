@@ -1,7 +1,7 @@
 import './App.css';
 import { useEffect, useState } from 'react';
 import { browser } from 'wxt/browser';
-import { useStorage, type SaveState } from '@/entrypoints/hooks/useStorage';
+import { useStorage, type LoadState, type SaveState } from '@/entrypoints/hooks/useStorage';
 import { useSearchProgress } from '@/entrypoints/hooks/useSearchProgress';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { DEFAULTS, SETTING_LIMITS, clampSetting } from '@/entrypoints/utils/settings';
@@ -15,7 +15,7 @@ import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
 import SearchProgressBar from '@/entrypoints/components/SearchProgressBar';
 import TaskResultsList from '@/entrypoints/components/TaskResults';
 import Icon from '@/entrypoints/components/Icon';
-import { combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
+import { combinedLoad, combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
 
 // The fork's own Chinese README, not the upstream one: the behaviour documented
 // there (stopping a round, the auto-run switch, 已发起 versus 到账) is this fork's.
@@ -152,14 +152,28 @@ function App() {
     const hasTaskSelected = active || autoDaily || claimPoints;
     const isStopping = phase === 'stopping' || stopRequested;
 
-    // Gaps this short are honoured, but they are below what Microsoft reliably
-    // credits — so the field warns rather than silently overriding the choice.
+    // Gaps this short are honoured, but whether Microsoft credits them cannot
+    // be verified from the extension — so the field warns rather than silently
+    // overriding the choice.
     const isTimeoutRisky = timeout < RECOMMENDED_MIN_TIMEOUT_SECONDS;
 
     const status = statusView({ isLoaded, isStopping, isRunning, results });
     const handlingCount = countNeedsHandling(results);
     const bindings = [activeStore, autoDailyStore, searchesStore, timeoutStore, closeTimeStore, openFirstStore, claimStore, autoRunStore];
     const saveState = combinedSave(bindings.map((binding) => binding.saveState));
+    const loadState = combinedLoad(bindings.map((binding) => binding.loadState));
+    // Starting a round uses the values on screen, so it waits until every
+    // setting has been read and its latest edit is stored: a value still being
+    // read, or one whose write has not gone through, is not a value a round may
+    // run on. Stopping is not gated here — it sends no values.
+    const settingsNotReady = loadState !== 'loaded' || saveState === 'saving' || saveState === 'error';
+    // A failed read leaves the defaults on screen, not the user's settings, and
+    // the hook holds every write back until its read has landed — so an edit
+    // made in that window would only change what is on screen and be silently
+    // replaced once the retry succeeds. The controls stay disabled until the
+    // "重新读取" beside them brings the real values in; nothing is editable to
+    // lose.
+    const settingsUnreadable = loadState === 'error';
     const settingsDirtyWhileRunning = isRunning && frozenConfig != null && (
         frozenConfig.searches !== searches || frozenConfig.timeout !== timeout || frozenConfig.closeTime !== closeTime
     );
@@ -185,6 +199,7 @@ function App() {
                             role="switch"
                             id="autoRunEnabled"
                             checked={autoRunEnabled}
+                            disabled={settingsUnreadable}
                             onChange={(e) => setAutoRunEnabled(e.target.checked)}
                         />
                     </div>
@@ -195,9 +210,9 @@ function App() {
                     <h2 className="group-title">执行内容</h2>
                     <section className="card">
                         <div className="tile-grid">
-                            <TaskTile id="autoCheckbox" label="执行搜索" checked={active} onChange={setActive} />
-                            <TaskTile id="autoDaily" label="完成每日活动" checked={autoDaily} onChange={setAutoDaily} />
-                            <TaskTile id="claimPoints" label="领取积分" checked={claimPoints} onChange={setClaimPoints} />
+                            <TaskTile id="autoCheckbox" label="执行搜索" checked={active} onChange={setActive} disabled={settingsUnreadable} />
+                            <TaskTile id="autoDaily" label="完成每日活动" checked={autoDaily} onChange={setAutoDaily} disabled={settingsUnreadable} />
+                            <TaskTile id="claimPoints" label="领取积分" checked={claimPoints} onChange={setClaimPoints} disabled={settingsUnreadable} />
                         </div>
                     </section>
                 </div>
@@ -205,7 +220,7 @@ function App() {
                 <div className="group">
                     <h2 className="group-title">搜索参数</h2>
                     <section className="card">
-                        <SearchPresetSelect searches={searches} onSelect={setSearches} />
+                        <SearchPresetSelect searches={searches} onSelect={setSearches} disabled={settingsUnreadable} />
                         <div className="divider" />
                         <div className="param-grid">
                             <NumberInput
@@ -216,6 +231,7 @@ function App() {
                                 hint={`${SETTING_LIMITS.searches.min}～${SETTING_LIMITS.searches.max} 的整数`}
                                 value={searches}
                                 onChange={setSearches}
+                                disabled={settingsUnreadable}
                             />
                             <NumberInput
                                 id="timeout"
@@ -225,6 +241,7 @@ function App() {
                                 hint={`${SETTING_LIMITS.timeout.min}～${SETTING_LIMITS.timeout.max} 的整数`}
                                 value={timeout}
                                 onChange={setTimeoutValue}
+                                disabled={settingsUnreadable}
                             />
                             <NumberInput
                                 id="closeTime"
@@ -234,24 +251,26 @@ function App() {
                                 hint={`${SETTING_LIMITS.closeTime.min}～${SETTING_LIMITS.closeTime.max} 的整数`}
                                 value={closeTime}
                                 onChange={setCloseTime}
+                                disabled={settingsUnreadable}
                             />
                         </div>
                         <p className="field-note">页面加载完成后，等待指定时间再关闭；0 表示加载后尽快关闭。</p>
                         {isTimeoutRisky && (
                             <p className="field-warning" role="status">
-                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时，Microsoft 常常不计积分，浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
+                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒的间隔是否会被计分，扩展无法确认；浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
                             </p>
                         )}
                         <div className="divider" />
                         <div className="search-option">
-                            <TaskTile id="openFirstResult" label="打开首个结果" checked={openFirstResult} onChange={setOpenFirstResult} />
-                            <p className="field-note">搜索的附属设置。开启后，每个搜索页会再打开首个结果。</p>
+                            <TaskTile id="openFirstResult" label="打开首个结果" checked={openFirstResult} onChange={setOpenFirstResult} disabled={settingsUnreadable} />
+                            <p className="field-note">搜索的附属设置。开启后，每个搜索页会在停留片刻后跳转到首个结果所在的网站。</p>
                         </div>
                     </section>
                 </div>
                 {settingsDirtyWhileRunning && (
                     <p className="field-note" role="status">设置将用于下一轮任务。</p>
                 )}
+                <LoadNote state={loadState} onRetry={() => retryFailedLoads(bindings)} />
                 <SaveNote state={saveState} onRetry={() => retryFailed(bindings)} />
 
                 <a className="ghost-button" href={HELP_URL} target="_blank" rel="noopener noreferrer" id="settingsHelpLink">
@@ -293,8 +312,12 @@ function App() {
                     isRunning={isRunning}
                     isStopping={isStopping}
                     canStart={hasTaskSelected}
-                    disabled={!isLoaded || isStopping}
+                    disabled={!isLoaded || isStopping || settingsNotReady}
                     onStop={() => setStopRequested(true)}
+                    // The stop was refused or never answered while the round may
+                    // still be running: unroll the mark, or the button stays on
+                    // "正在停止" and the stop cannot be sent again.
+                    onStopFailed={() => setStopRequested(false)}
                 />
                 {!hasTaskSelected && !isRunning && (
                     <p className="field-warning" role="status">请在设置中选择至少一项任务</p>
@@ -320,6 +343,7 @@ function App() {
                         role="switch"
                         id="autoRunEnabled"
                         checked={autoRunEnabled}
+                        disabled={settingsUnreadable}
                         onChange={(e) => setAutoRunEnabled(e.target.checked)}
                     />
                 </div>
@@ -334,6 +358,7 @@ function App() {
                 </button>
             </section>
 
+            <LoadNote state={loadState} onRetry={() => retryFailedLoads(bindings)} />
             <SaveNote state={saveState} onRetry={() => retryFailed(bindings)} />
             <a className="ghost-button" href={REWARDS_URL} target="_blank" rel="noopener noreferrer" id="rewardsLink">
                 打开 Rewards
@@ -359,6 +384,24 @@ function retryFailed(bindings: { saveState: SaveState; retrySave: () => void }[]
     for (const binding of bindings) {
         if (binding.saveState === 'error') binding.retrySave();
     }
+}
+
+function retryFailedLoads(bindings: { loadState: LoadState; retryLoad: () => void }[]): void {
+    for (const binding of bindings) {
+        if (binding.loadState === 'error') binding.retryLoad();
+    }
+}
+
+// A failed read leaves the defaults on screen, so the failure carries its own
+// retry — on both views, next to the save note.
+function LoadNote({ state, onRetry }: { state: LoadState; onRetry: () => void }) {
+    if (state !== 'error') return null;
+    return (
+        <p className="save-note save-note--error" role="status">
+            设置读取失败
+            <button type="button" className="save-retry" onClick={onRetry}>重新读取</button>
+        </p>
+    );
 }
 
 function SaveNote({ state, onRetry }: { state: SaveState; onRetry: () => void }) {
@@ -406,9 +449,12 @@ interface TaskTileProps {
     label: string;
     checked: boolean;
     onChange: (checked: boolean) => void;
+    // While the stored value could not be read, the shown state is the default,
+    // not the user's setting — a flip made then would never reach storage.
+    disabled?: boolean;
 }
 
-function TaskTile({ id, label, checked, onChange }: TaskTileProps) {
+function TaskTile({ id, label, checked, onChange, disabled }: TaskTileProps) {
     return (
         <label className={`tile${checked ? ' tile--on' : ''}`} htmlFor={id}>
             <input
@@ -416,6 +462,7 @@ function TaskTile({ id, label, checked, onChange }: TaskTileProps) {
                 type="checkbox"
                 id={id}
                 checked={checked}
+                disabled={disabled}
                 onChange={(e) => onChange(e.target.checked)}
             />
             <span className="tile-box" aria-hidden="true">

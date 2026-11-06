@@ -6,6 +6,22 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-cws.sh"
 export FIXTURE_JQ="$(command -v jq)"
+# Linux images ship only python3, while a Windows Git Bash usually exposes only
+# `python`. A Git Bash `python3` can also be the Microsoft Store placeholder,
+# which `command -v` finds but cannot run, so each candidate is verified before
+# it is chosen.
+PYTHON=""
+for candidate in python3 python; do
+  found="$(command -v "$candidate" 2>/dev/null)" || continue
+  "$found" -c 'import sys' >/dev/null 2>&1 || continue
+  PYTHON="$found"
+  break
+done
+if [[ -z "$PYTHON" ]]; then
+  echo "no runnable python3 or python found" >&2
+  exit 1
+fi
+export PYTHON
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -25,16 +41,32 @@ export CWS_UPLOAD_POLL_ATTEMPTS="2"
 export CWS_UPLOAD_POLL_SECONDS="0"
 
 # The local jq.exe writes CRLF; GitHub's Linux runners do not, so strip CR here
-# to keep the fixtures byte-identical to the real environment.
-cat > "$work/bin/jq" <<'EOF'
+# to keep the fixtures byte-identical to the real environment. A host without
+# any jq (a bare WSL, or a Git Bash without it — the local gates run there)
+# falls back to the checked-in python implementation of exactly the
+# expressions the script under test uses.
+cat > "$work/bin/jq" <<EOF
 #!/usr/bin/env bash
 set -o pipefail
-"$FIXTURE_JQ" "$@" | tr -d '\r'
+if [[ -n "\${FIXTURE_JQ:-}" ]]; then
+  "\$FIXTURE_JQ" "\$@" | tr -d '\r'
+else
+  "\$PYTHON" "$root/.github/scripts/jq-fallback.py" "\$@" | tr -d '\r'
+fi
+EOF
+
+# The script under test reads its manifest through a bare `python` heredoc, and
+# the interpreter chosen above may answer only to python3. A shim in the same
+# bin the stubs live in — the PATH prefix the fixtures already use to intercept
+# gh — answers that name, so the fixtures and the script run the same one.
+cat > "$work/bin/python" <<EOF
+#!/usr/bin/env bash
+exec "$PYTHON" "\$@"
 EOF
 
 make_zip() {
   local version="$1" path="$2" name="${3:-manifest.json}"
-  python - "$version" "$path" "$name" <<'PY'
+  "$PYTHON" - "$version" "$path" "$name" <<'PY'
 import json, sys, zipfile
 version, path, name = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:
@@ -138,7 +170,7 @@ if [[ "$1" == "release" && "$2" == "download" ]]; then
 fi
 EOF
 
-chmod +x "$work/bin/jq" "$work/bin/curl" "$work/bin/gh"
+chmod +x "$work/bin/jq" "$work/bin/curl" "$work/bin/gh" "$work/bin/python"
 
 # --- helpers ---------------------------------------------------------------
 reset_case() {

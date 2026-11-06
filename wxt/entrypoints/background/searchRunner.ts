@@ -1,13 +1,14 @@
 import { browser } from 'wxt/browser';
 import { storage } from '#imports';
 import { getRndInteger } from '@/entrypoints/utils/helpers';
+import { FIRST_RESULT_NAV_WINDOW_MS } from '@/entrypoints/utils/firstResult';
 import { buildSearchQuery, buildSearchUrl, nextDelayMs, shouldOpenMore } from '@/entrypoints/utils/search';
 import { getStorageItem } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { clearBadge, setSearchCountBadge } from '@/entrypoints/utils/browserAction';
 import type { RunConfig } from '@/entrypoints/utils/runState';
 import { trackTab, untrackTab } from './tabCleanup';
-import { claimStep, currentRun, endRun, noteSearchDeadline, readConfig, readProgress, recordResult, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
+import { claimStep, clearSearchGrants, currentRun, endRun, noteSearchDeadline, noteSearchTab, readConfig, readProgress, readSearchGrants, recordResult, revokeSearchGrants, writeProgress, writeProgressIfRunning, type TaskRunState } from './taskRun';
 
 const ALARM_NAME = 'openTabAlarm';
 // A search tab closes `closeTime` after it finishes loading, so the durable
@@ -91,26 +92,35 @@ export async function handleAlarmStep(alarm: { name: string }): Promise<void> {
 // the 30s backstop alarm both arrive here; whichever lands second sees the step
 // already taken and returns. A callback whose round was stopped or replaced fails
 // the same check, so it cannot open a tab or rewrite the new round's count.
+//
+// A step that fails outright — the tab open, a storage write, arming the next
+// alarm — is settled on its own round through the same end step as every other
+// ending. Letting the rejection escape to the alarm caller left the result
+// `running` and the record blocking every later start.
 async function runSearchStep(runId: number, step: number, config: RunConfig): Promise<void> {
     if (!(await claimStep(runId, step, 'search'))) return;
-    await openSearchTab(runId, config.closeTime * 1000);
-    // Stop can land while the tab is being created. The tab itself cannot be
-    // uncreated, but it is already registered for cleanup; this step must not
-    // put the round back into "running" or arm another one.
-    if (!(await stillRunning(runId))) {
-        clearBadge();
-        return;
-    }
-    // A failed write means the round ended between the check above and the
-    // queued write, so this step is no longer current: no further scheduling.
-    if (!(await recordProgress(runId, step, config.searches))) {
-        clearBadge();
-        return;
-    }
-    if (shouldOpenMore(step, config.searches)) {
-        scheduleNextStep(runId, step + 1, config.timeout);
-    } else {
-        await finishSearch(runId, { status: 'completed' });
+    try {
+        await openSearchTab(runId, config.closeTime * 1000);
+        // Stop can land while the tab is being created. The tab itself cannot be
+        // uncreated, but it is already registered for cleanup; this step must not
+        // put the round back into "running" or arm another one.
+        if (!(await stillRunning(runId))) {
+            clearBadge();
+            return;
+        }
+        // A failed write means the round ended between the check above and the
+        // queued write, so this step is no longer current: no further scheduling.
+        if (!(await recordProgress(runId, step, config.searches))) {
+            clearBadge();
+            return;
+        }
+        if (shouldOpenMore(step, config.searches)) {
+            await scheduleNextStep(runId, step + 1, config.timeout);
+        } else {
+            await finishSearch(runId, { status: 'completed' });
+        }
+    } catch (error) {
+        await finishSearch(runId, { status: 'failed', reason: reasonOf(error) });
     }
 }
 
@@ -132,15 +142,20 @@ async function stillRunning(runId: number): Promise<boolean> {
 // creating an alarm replaces the pending one, so a step never runs twice.
 let shortStepTimer: ReturnType<typeof setTimeout> | undefined;
 
-function scheduleNextStep(runId: number, step: number, searchTimeout: number): void {
+async function scheduleNextStep(runId: number, step: number, searchTimeout: number): Promise<void> {
     const delayMs = nextDelayMs(searchTimeout);
     const name = searchAlarmName(runId, step);
-    browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
+    // Both writes below are awaited. The alarm is the durable trigger for the
+    // next step and the deadline is what the sweep judges the round by, so a
+    // create or a note that never settled must fail this step — which ends the
+    // round — instead of leaving a deadline recorded for a wake-up that was
+    // never armed.
+    await browser.alarms.create(name, { delayInMinutes: Math.max(delayMs, ALARM_MIN_DELAY_MS) / 60000 });
     // Search has no page the sweep can judge it by, even when the dashboard is
     // still open. Recording when the next step is due lets a sweep after a
     // worker restart tell "waiting" from "abandoned", instead of leaving the
     // record to block every later start.
-    void noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
+    await noteSearchDeadline(runId, Date.now() + Math.max(delayMs, ALARM_MIN_DELAY_MS) + SEARCH_STEP_WAKE_ALLOWANCE_MS);
     clearShortStepTimer();
     if (delayMs < ALARM_MIN_DELAY_MS) {
         shortStepTimer = setTimeout(() => {
@@ -174,10 +189,57 @@ export async function stopSearches(): Promise<void> {
     );
 }
 
-async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed'; reason?: string }): Promise<void> {
-    await recordResult(runId, 'search', result);
-    await stopSearches();
-    await endRun(runId, 'search');
+// The single end step for this round's search half. Every ending — the first
+// step, a later step, a toggle-off, a failed step and the stale sweep — settles
+// through here, so the result, the search flag, the badge and this round's
+// alarms are always updated together: no path can end the round and leave one
+// of them behind. The result is written behind the runId guard, so a callback
+// from an old round records nothing on whatever round is current now.
+export async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed' | 'unconfirmed'; reason?: string }): Promise<void> {
+    // The record may only be dropped once the result is durable. A transient
+    // failure of the result write used to run endRun anyway, which deleted the
+    // record while the result still said 'running' — and the finishSearch that
+    // re-enters through runRewards' catch then found no record and recorded
+    // nothing, so the search stayed "running": reported as not running, with
+    // no retry, until the next round overwrote it. With the record kept, that
+    // re-entry settles both the result and the record; if it fails too, the
+    // stale sweep settles the round once its own deadline has passed.
+    let settled = false;
+    try {
+        await recordResult(runId, 'search', result);
+        settled = true;
+    } finally {
+        // The rest of the cleanup is independent of the result write — leaving
+        // the flag up, the badge on or an alarm armed would outlive the round
+        // and disturb the next one — so it runs whatever happened to it, each
+        // step in its own try, so one failing write cannot keep the ones after
+        // it from running either.
+        try {
+            // The cleanup is global — the badge, the short-step timer and every
+            // search alarm, the new round's own included — so it may only run
+            // while this round still owns the record. A late callback from a
+            // stopped or replaced round is already turned away by the runId
+            // guards in recordResult and endRun; letting it clean up anyway
+            // would stall the round that is current now. What an old round
+            // leaves behind is harmless: its alarms name it and are dropped as
+            // stale, and its timer is cleared by the next schedule.
+            if ((await currentRun())?.id === runId) await stopSearches();
+        } finally {
+            try {
+                // A cancelled round — stopped, or the search toggle turned off —
+                // revokes the navigation grants it handed out. Every other
+                // ending leaves them, so a tab still waiting on its results
+                // page may still navigate after the schedule has finished.
+                if (result.status === 'cancelled') await revokeSearchGrants(runId);
+            } finally {
+                if (settled) await endRun(runId, 'search');
+            }
+        }
+    }
+}
+
+function reasonOf(error: unknown): string {
+    return error instanceof Error && error.message ? error.message : '搜索步骤执行失败';
 }
 
 // Turning "执行搜索" off stops the search half of a round that is already in
@@ -193,10 +255,16 @@ export function watchSearchesToggle(): void {
 
 async function stopSearchOnly(): Promise<void> {
     const run = await currentRun();
-    await stopSearches();
-    if (!run?.search) return;
-    await recordResult(run.id, 'search', { status: 'cancelled', reason: '已关闭搜索' });
-    await endRun(run.id, 'search');
+    if (!run?.search) {
+        // No round holds the search half — still drop the alarms, the timer
+        // and the badge a past round may have left behind, and the grants a
+        // finished round's tabs still carry: a turned-off toggle revokes them
+        // the same as a live round's.
+        await stopSearches();
+        await clearSearchGrants();
+        return;
+    }
+    await finishSearch(run.id, { status: 'cancelled', reason: '已关闭搜索' });
 }
 
 // `opened` is how many search tabs this round has started, not how many points
@@ -225,30 +293,82 @@ async function openSearchTab(runId: number, closeTimeMs: number): Promise<number
     const openFirstResult = await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC);
     const query = buildSearchUrl(buildSearchQuery());
     const url = openFirstResult ? `${query}&marAuto=1` : query;
-    return await openAndClose(runId, url, closeTimeMs + getRndInteger(0, 1000));
-}
-
-async function openAndClose(runId: number, url: string, closeTimeMs: number): Promise<number | null> {
     const tab = await browser.tabs.create({ url, active: false });
     const tabId = tab.id!;
+    // The tab the marker was added to is the only one that will later ask to
+    // leave the results page; naming it here is what lets the background say no
+    // to every other page that carries ?marAuto. That ask can arrive the
+    // moment the results page has loaded, and its refusal is final — the
+    // content script's guard is one-shot — so naming the tab is the first
+    // thing after the create, ahead of the slower bookkeeping below, for the
+    // ask to never beat the registration.
+    if (openFirstResult) {
+        try {
+            await noteSearchTab(runId, tabId);
+        } catch (error) {
+            // The tab is created but its registration failed, so no listener and
+            // no sweep will ever close it. Close it right here as best effort —
+            // then let the original error escape, so the step settles the round
+            // through the same end step as every other failure.
+            await browser.tabs.remove(tabId).catch(() => {});
+            throw error;
+        }
+    }
+    return await openAndClose(runId, tabId, closeTimeMs + getRndInteger(0, 1000), openFirstResult === true);
+}
+
+// Asked through the background's message listener by the bing-result content
+// script before that tab leaves the results page. Three things must hold at
+// that moment: the asking tab carries a grant (the ?marAuto marker is a hint,
+// not permission — the grant is recorded when the tab is opened), the round
+// that granted it was not stopped, and the setting is still on (it may have
+// been turned off while the tab sat on the results page). The grant outlives
+// the schedule itself: the last step finishes the round the moment its tab
+// opens, while the script's second ask only comes seconds later, so an
+// authorization that ended with the round would refuse the last tab of every
+// round — and with a one-search round, its only tab. Only a stop or a
+// turned-off search toggle revokes a grant.
+export async function mayOpenFirstResult(tabId: number | undefined): Promise<boolean> {
+    if (tabId == null) return false;
+    if ((await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC)) !== true) return false;
+    // A stop marks the record `stopping` before its revocation lands, so the
+    // phase is checked first: a stop that is still settling already refuses.
+    const run = await currentRun();
+    if (run?.phase === 'stopping') return false;
+    const grants = await readSearchGrants();
+    return grants[String(tabId)] != null;
+}
+
+async function openAndClose(runId: number, tabId: number, closeTimeMs: number, marked: boolean): Promise<number | null> {
     // Backstop for the close below, whose timer and listener are both lost when
-    // the service worker is torn down. A stop that landed while create() was in
-    // flight cannot undo the tab, so it still has to be registered for cleanup.
-    await trackTab(tabId, closeTimeMs + SEARCH_TAB_LOAD_ALLOWANCE_MS);
+    // the service worker is torn down. A stop that landed while the tab was
+    // being created cannot undo the tab, so it still has to be registered for
+    // cleanup. A marked tab waits out its whole navigation window before the
+    // close timer even starts, so that window is part of its deadline — the
+    // fixed allowance alone no longer covers the tab's real lifetime, and a
+    // slow-loading page would be swept mid-navigate.
+    await trackTab(tabId, closeTimeMs + (marked ? FIRST_RESULT_NAV_WINDOW_MS : 0) + SEARCH_TAB_LOAD_ALLOWANCE_MS);
     if (!(await stillRunning(runId))) return null;
     function listener(updatedId: number, changeInfo: { status?: string }): void {
         if (updatedId === tabId && changeInfo.status === 'complete') {
             browser.tabs.onUpdated.removeListener(listener);
-            waitAndClose(tabId, closeTimeMs);
+            waitAndClose(tabId, closeTimeMs, marked);
         }
     }
     browser.tabs.onUpdated.addListener(listener);
     return tabId;
 }
 
-function waitAndClose(id: number, closeTimeMs: number): void {
+// The close timer starts once the results page has loaded. A marked tab first
+// gets its whole navigation window: the pause before the first-result jump is
+// randomized, so a close inside that window would race — and usually kill —
+// the jump, which is what made a zero close time never navigate and the 5s
+// default do so only sometimes. Only then does the configured close time run.
+// An unmarked tab is never going to navigate, so it keeps that time alone.
+function waitAndClose(id: number, closeTimeMs: number, marked: boolean): void {
     const timeout = closeTimeMs <= 0 ? 500 : closeTimeMs;
-    setTimeout(() => void closeTab(id), Math.max(timeout - 500, 0) + getRndInteger(0, 1000));
+    const navWindow = marked ? FIRST_RESULT_NAV_WINDOW_MS : 0;
+    setTimeout(() => void closeTab(id), navWindow + Math.max(timeout - 500, 0) + getRndInteger(0, 1000));
 }
 
 async function closeTab(id: number): Promise<void> {
