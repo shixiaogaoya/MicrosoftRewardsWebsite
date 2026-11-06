@@ -152,8 +152,9 @@ function App() {
     const hasTaskSelected = active || autoDaily || claimPoints;
     const isStopping = phase === 'stopping' || stopRequested;
 
-    // Gaps this short are honoured, but they are below what Microsoft reliably
-    // credits — so the field warns rather than silently overriding the choice.
+    // Gaps this short are honoured, but whether Microsoft credits them cannot
+    // be verified from the extension — so the field warns rather than silently
+    // overriding the choice.
     const isTimeoutRisky = timeout < RECOMMENDED_MIN_TIMEOUT_SECONDS;
 
     const status = statusView({ isLoaded, isStopping, isRunning, results });
@@ -245,13 +246,13 @@ function App() {
                         <p className="field-note">页面加载完成后，等待指定时间再关闭；0 表示加载后尽快关闭。</p>
                         {isTimeoutRisky && (
                             <p className="field-warning" role="status">
-                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒时，Microsoft 常常不计积分，浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
+                                短于 {RECOMMENDED_MIN_TIMEOUT_SECONDS} 秒的间隔是否会被计分，扩展无法确认；浏览器也可能把间隔拉长。建议 {DEFAULTS.timeout} 秒或更长；填 0 时实际约 1 秒。
                             </p>
                         )}
                         <div className="divider" />
                         <div className="search-option">
                             <TaskTile id="openFirstResult" label="打开首个结果" checked={openFirstResult} onChange={setOpenFirstResult} />
-                            <p className="field-note">搜索的附属设置。开启后，每个搜索页会再打开首个结果。</p>
+                            <p className="field-note">搜索的附属设置。开启后，每个搜索页会在停留片刻后跳转到首个结果所在的网站。</p>
                         </div>
                     </section>
                 </div>
