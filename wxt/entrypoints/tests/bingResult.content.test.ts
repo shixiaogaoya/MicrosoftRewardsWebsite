@@ -11,7 +11,7 @@ vi.mock('wxt/browser', () => ({
     browser: { runtime: { sendMessage } },
 }));
 
-import script from './bingResult.content';
+import script from '../bingResult.content';
 
 const TARGET_HREF = 'https://example.com/first-organic-result';
 // The randomized pause before navigating is 1.5–5.5s; advancing past the whole
