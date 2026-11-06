@@ -59,8 +59,11 @@ function NumberInput({ id, label, kind, value, hint, unit, onChange }: NumberInp
                     onKeyDown={(event) => {
                         // Enter confirms the draft the way blur does, so an
                         // invalid one is replaced right away instead of sitting
-                        // on the field.
-                        if (event.key === 'Enter') commit(draft);
+                        // on the field. The Enter that confirms an IME
+                        // composition is not that key: the draft is still
+                        // unfinished composition text, and committing it would
+                        // reset what the user is typing.
+                        if (event.key === 'Enter' && !event.nativeEvent.isComposing) commit(draft);
                     }}
                 />
                 <span className="input-unit" aria-hidden="true">{unit}</span>

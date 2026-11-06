@@ -66,6 +66,12 @@ describe('NumberInput', () => {
     });
   }
 
+  function pressEnterWhileComposing(): void {
+    act(() => {
+      input().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }));
+    });
+  }
+
   function blur(): void {
     act(() => {
       input().dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
@@ -100,5 +106,20 @@ describe('NumberInput', () => {
     pressEnter();
     expect(committed).toEqual([12]);
     expect(input().value).toBe('12');
+  });
+
+  it('leaves an IME composition confirm alone instead of resetting the draft', () => {
+    render(5);
+
+    type('搜');
+    expect(input().value).toBe('搜');
+
+    pressEnterWhileComposing();
+    expect(input().value).toBe('搜');
+    expect(committed).toEqual([]);
+
+    pressEnter();
+    expect(input().value).toBe('5');
+    expect(committed).toEqual([]);
   });
 });

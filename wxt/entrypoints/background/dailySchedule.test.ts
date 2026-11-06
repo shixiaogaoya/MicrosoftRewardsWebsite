@@ -102,6 +102,30 @@ describe('runRewards', () => {
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
   });
 
+  // Regression: the attempt writes came after beginRun with nothing around
+  // them. One rejecting write let runRewards itself reject, so the message
+  // handler answered a generic refusal while the run record and its `running`
+  // results stayed behind, blocking every later start.
+  it('settles the armed round and refuses when recording an attempt fails', async () => {
+    await seed({});
+    const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+    vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+      if (Object.keys(items ?? {}).some((key) => key.includes('taskAttempts'))) {
+        throw new Error('attempts write failed');
+      }
+      await set(items);
+    });
+
+    await expect(runRewards()).resolves.toEqual({ accepted: false, reason: '任务启动失败，请重试' });
+
+    const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
+    expect(results).toMatchObject({
+      search: { status: 'failed' },
+      daily: { status: 'failed' },
+    });
+    expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+  });
+
   it('opens no dashboard when "Daily set" is off, but still searches', async () => {
     const urls = trackCreatedTabs();
     await seed({ autoDaily: false });

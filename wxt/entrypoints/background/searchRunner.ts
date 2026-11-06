@@ -195,9 +195,28 @@ export async function stopSearches(): Promise<void> {
 // of them behind. The result is written behind the runId guard, so a callback
 // from an old round records nothing on whatever round is current now.
 export async function finishSearch(runId: number, result: { status: 'completed' | 'cancelled' | 'failed' | 'unconfirmed'; reason?: string }): Promise<void> {
-    await recordResult(runId, 'search', result);
-    await stopSearches();
-    await endRun(runId, 'search');
+    try {
+        await recordResult(runId, 'search', result);
+    } finally {
+        // A transient failure of the result write must not strand the round:
+        // the search flag, the badge, the alarms and the run record would all
+        // outlive it, and the record would block every later start. Cleanup
+        // therefore runs in a finally, and each step in its own, so one
+        // failing write cannot keep the ones after it from running either.
+        try {
+            // The cleanup is global — the badge, the short-step timer and every
+            // search alarm, the new round's own included — so it may only run
+            // while this round still owns the record. A late callback from a
+            // stopped or replaced round is already turned away by the runId
+            // guards in recordResult and endRun; letting it clean up anyway
+            // would stall the round that is current now. What an old round
+            // leaves behind is harmless: its alarms name it and are dropped as
+            // stale, and its timer is cleared by the next schedule.
+            if ((await currentRun())?.id === runId) await stopSearches();
+        } finally {
+            await endRun(runId, 'search');
+        }
+    }
 }
 
 function reasonOf(error: unknown): string {
@@ -252,12 +271,17 @@ async function openSearchTab(runId: number, closeTimeMs: number): Promise<number
     const openFirstResult = await getStorageItem<boolean>('openFirstResult', StorageValues.SYNC);
     const query = buildSearchUrl(buildSearchQuery());
     const url = openFirstResult ? `${query}&marAuto=1` : query;
-    const tabId = await openAndClose(runId, url, closeTimeMs + getRndInteger(0, 1000));
+    const tab = await browser.tabs.create({ url, active: false });
+    const tabId = tab.id!;
     // The tab the marker was added to is the only one that will later ask to
     // leave the results page; naming it here is what lets the background say no
-    // to every other page that carries ?marAuto.
-    if (openFirstResult && tabId != null) await noteSearchTab(runId, tabId);
-    return tabId;
+    // to every other page that carries ?marAuto. That ask can arrive the
+    // moment the results page has loaded, and its refusal is final — the
+    // content script's guard is one-shot — so naming the tab is the first
+    // thing after the create, ahead of the slower bookkeeping below, for the
+    // ask to never beat the registration.
+    if (openFirstResult) await noteSearchTab(runId, tabId);
+    return await openAndClose(runId, tabId, closeTimeMs + getRndInteger(0, 1000));
 }
 
 // Asked through the background's message listener by the bing-result content
@@ -273,12 +297,11 @@ export async function mayOpenFirstResult(tabId: number | undefined): Promise<boo
     return run?.phase === 'running' && run.search === true && (run.searchTabIds?.includes(tabId) ?? false);
 }
 
-async function openAndClose(runId: number, url: string, closeTimeMs: number): Promise<number | null> {
-    const tab = await browser.tabs.create({ url, active: false });
-    const tabId = tab.id!;
+async function openAndClose(runId: number, tabId: number, closeTimeMs: number): Promise<number | null> {
     // Backstop for the close below, whose timer and listener are both lost when
-    // the service worker is torn down. A stop that landed while create() was in
-    // flight cannot undo the tab, so it still has to be registered for cleanup.
+    // the service worker is torn down. A stop that landed while the tab was
+    // being created cannot undo the tab, so it still has to be registered for
+    // cleanup.
     await trackTab(tabId, closeTimeMs + SEARCH_TAB_LOAD_ALLOWANCE_MS);
     if (!(await stillRunning(runId))) return null;
     function listener(updatedId: number, changeInfo: { status?: string }): void {

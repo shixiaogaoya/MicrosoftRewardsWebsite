@@ -58,15 +58,22 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
     // to. A task whose toggle was switched off after it ran is refused — told
     // so, not silently ignored, and never switched back on by the retry itself.
     const [rejection, setRejection] = useState<string | null>(null);
+    // The row's retry button is held while its receipt is in flight, so a
+    // double click sends one command instead of a second one to be refused.
+    const [pending, setPending] = useState(false);
     const canRetry = !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
     const tone = TONE[result.status];
     async function retryTask(): Promise<void> {
+        if (pending) return;
         setRejection(null);
+        setPending(true);
         try {
             const receipt = await browser.runtime.sendMessage({ action: 'popup', only: [kind] }) as CommandReceipt | undefined;
             if (receipt && !receipt.accepted) setRejection(receipt.reason);
         } catch {
             setRejection('未收到后台响应，请重试');
+        } finally {
+            setPending(false);
         }
     }
     return (
@@ -80,7 +87,7 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
                     <span className="task-actions">
                         <span className={`task-status task-status--${result.status === 'failed' ? 'error' : tone}`}>{STATUS_TEXT[result.status]}</span>
                         {canRetry && (
-                            <button type="button" className="task-retry" onClick={retryTask} aria-label={`重试${LABELS[kind]}`}>
+                            <button type="button" className="task-retry" onClick={retryTask} disabled={pending} aria-disabled={pending} aria-label={`重试${LABELS[kind]}`}>
                                 <Icon name="rotate-ccw" />
                             </button>
                         )}

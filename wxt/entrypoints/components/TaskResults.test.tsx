@@ -67,4 +67,26 @@ describe('TaskResults retry', () => {
 
     expect(host.querySelectorAll('.task-reason').length).toBe(1);
   });
+
+  it('disables the retry button while its receipt is in flight', async () => {
+    render({ daily: { status: 'failed', reason: '页面未能打开' } });
+    let answer!: (receipt: CommandReceipt) => void;
+    vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockReturnValue(
+      new Promise<CommandReceipt>((resolve) => { answer = resolve; }) as never
+    );
+
+    await act(async () => {
+      retryButton().click();
+    });
+
+    expect(retryButton().disabled).toBe(true);
+    expect(fakeBrowser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      answer({ accepted: true });
+    });
+
+    expect(retryButton().disabled).toBe(false);
+    expect(fakeBrowser.runtime.sendMessage).toHaveBeenCalledTimes(1);
+  });
 });

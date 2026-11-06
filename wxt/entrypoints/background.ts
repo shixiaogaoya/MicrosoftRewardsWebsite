@@ -60,8 +60,13 @@ export default defineBackground(() => {
         } else if (request.action === 'bingFirstResult') {
             // The bing-result content script asks this before leaving the
             // results page, and awaits the reply. Returning true keeps the
-            // channel open for it.
-            void mayOpenFirstResult(sender.tab?.id).then((allowed) => sendResponse({ allowed }));
+            // channel open for it. An unexpected throw still has to answer —
+            // the script reads anything but an explicit yes as a no, so a
+            // missing reply would keep it waiting until the page unloads.
+            void mayOpenFirstResult(sender.tab?.id).then(
+                (allowed) => sendResponse({ allowed }),
+                () => sendResponse({ allowed: false })
+            );
             return true;
         }
     });

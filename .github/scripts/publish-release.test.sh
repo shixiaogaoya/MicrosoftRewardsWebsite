@@ -5,6 +5,9 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-release.sh"
 export FIXTURE_JQ="$(command -v jq)"
+# Linux images ship only python3, while a Windows Git Bash usually exposes only
+# `python`; take whichever interpreter is present.
+export PYTHON="$(command -v python3 || command -v python)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -16,7 +19,7 @@ EOF
 make_zip() {
   local version="$1"
   local zip="$2"
-  python - "$version" "$zip" <<'PY'
+  "$PYTHON" - "$version" "$zip" <<'PY'
 import json, sys, zipfile
 version, path = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:
@@ -337,7 +340,7 @@ run_case raced-publish skip v3.1.3
 # A wrong manifest version must fail before any tag or release is considered.
 prepare_absent bad-manifest
 run_case bad-manifest fail '' \
-  bash -c 'python - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
 import json, sys, zipfile
 path, payload = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:

@@ -20,20 +20,26 @@ function ManualClaimButton({ isRunning, isStopping, canStart, disabled, onStop }
     // round already running, a stop with nothing left to stop — is shown next
     // to the button, so the click is explained instead of silently ignored.
     const [rejection, setRejection] = useState<string | null>(null);
+    // The button is held while its receipt is in flight: a second click in that
+    // gap would only send another command the background has to refuse.
+    const [pending, setPending] = useState(false);
     // The disabled prop carries the settings' read/save state, which only
     // matters for starting: starting runs on the values on screen. Stopping
     // sends no values, so a running round keeps the button available unless its
     // stop request is already in flight.
-    const blocked = isRunning ? isStopping : disabled || !canStart;
+    const blocked = pending || (isRunning ? isStopping : disabled || !canStart);
     async function handleClick() {
         if (blocked) return;
         setRejection(null);
+        setPending(true);
         if (isRunning) onStop();
         try {
             const receipt = await browser.runtime.sendMessage({ action: isRunning ? 'stop' : 'popup' }) as CommandReceipt | undefined;
             if (receipt && !receipt.accepted) setRejection(receipt.reason);
         } catch {
             setRejection('未收到后台响应，请重试');
+        } finally {
+            setPending(false);
         }
     }
 

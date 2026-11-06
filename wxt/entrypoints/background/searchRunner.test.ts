@@ -3,7 +3,7 @@
 // that WXT's `#imports` transform triggers (same reason as useStorage.test.ts).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { handleAlarmStep, mayOpenFirstResult, startSearches, stopSearches } from './searchRunner';
+import { finishSearch, handleAlarmStep, mayOpenFirstResult, startSearches, stopSearches } from './searchRunner';
 import { beginRun, endRun, noteSearchTab, requestStop } from './taskRun';
 import { getStorageItem, setStorageItem, setStorageItems } from '@/entrypoints/hooks/useStorage';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
@@ -212,6 +212,57 @@ describe('searchRunner', () => {
     });
   });
 
+  describe('finishSearch', () => {
+    // Regression: the result write used to be awaited ahead of the cleanup
+    // steps with nothing in between, so a transient failure of that one write
+    // escaped before any of them — leaving the flag up, the badge on, the
+    // alarms armed and the run record blocking every later start.
+    it('still clears the flag, badge, alarms and record when the result write fails', async () => {
+      await seed({});
+      const runId = await startRound(1);
+      await fakeBrowser.action.setBadgeText({ text: '1' });
+      fakeBrowser.alarms.create(`openTabAlarm:${runId}:2`, { delayInMinutes: 1 });
+      const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+      vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+        if (Object.keys(items ?? {}).some((key) => key.includes('taskResults'))) {
+          throw new Error('results write failed');
+        }
+        await set(items);
+      });
+
+      await expect(finishSearch(runId, { status: 'completed' })).rejects.toThrow('results write failed');
+
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
+      expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
+      expect(await fakeBrowser.alarms.getAll()).toEqual([]);
+      expect(await fakeBrowser.action.getBadgeText({})).toBe('');
+    });
+
+    // Regression: the cleanup inside the end step is global — the badge, the
+    // short-step timer and every search alarm — while a late callback from a
+    // stopped or replaced round is turned away by the runId guards in
+    // recordResult and endRun. It used to run the global cleanup anyway, which
+    // dropped the new round's armed alarm and stalled it.
+    it("leaves the new round's flag, badge and alarm alone when a late callback ends an old round", async () => {
+      await seed({});
+      // A round is stopped and replaced while one of its steps is between the
+      // claim and the end — the awaits in between are where the swap lands.
+      const first = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      await requestStop();
+      await endRun(first.id, 'search');
+      const second = await beginRun(['search'], { searches: 5, timeout: 60, closeTime: 5 });
+      await setStorageItem(PROGRESS_KEY, { opened: 1, total: 5, isSearching: true }, StorageValues.LOCAL);
+      await fakeBrowser.action.setBadgeText({ text: '1' });
+      fakeBrowser.alarms.create(`openTabAlarm:${second.id}:2`, { delayInMinutes: 1 });
+
+      await finishSearch(first.id, { status: 'completed' });
+
+      expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(true);
+      expect(await fakeBrowser.action.getBadgeText({})).toBe('1');
+      expect(await fakeBrowser.alarms.get(`openTabAlarm:${second.id}:2`)).toBeDefined();
+    });
+  });
+
   describe('stopSearches', () => {
     it('clears the running flag and any pending alarm', async () => {
       await seed({});
@@ -322,6 +373,38 @@ describe('searchRunner', () => {
 
       const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
       expect(state?.searchTabIds).toHaveLength(1);
+    });
+
+    // Regression: the tab used to be named only after the slower bookkeeping
+    // that follows the create, so a results page that loaded through that
+    // window asked before the round had named its tab — and the ask is
+    // one-shot, so the navigation was skipped for good.
+    it('names the tab before the bookkeeping that follows the create', async () => {
+      await seed({ openFirstResult: true });
+      const runId = await startRound();
+      let createdTabId: number | undefined;
+      const create = fakeBrowser.tabs.create.bind(fakeBrowser.tabs);
+      vi.spyOn(fakeBrowser.tabs, 'create').mockImplementation(async (info: any) => {
+        const tab = await create(info);
+        createdTabId = tab.id;
+        return tab;
+      });
+      let asked: boolean | undefined;
+      const set = fakeBrowser.storage.local.set.bind(fakeBrowser.storage.local);
+      vi.spyOn(fakeBrowser.storage.local, 'set').mockImplementation(async (items) => {
+        await set(items);
+        // The durable tab registration is the first of the slower writes that
+        // follow the create; by the time it settles, the results page may
+        // already be asking.
+        if (Object.keys(items ?? {}).some((key) => key.includes('trackedTabs'))) {
+          asked = await mayOpenFirstResult(createdTabId);
+        }
+      });
+
+      await startSearches(runId, { searches: 5, timeout: 60, closeTime: 5 });
+
+      expect(asked).toBe(true);
+      expect((await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL))?.searchTabIds).toContain(createdTabId);
     });
 
     it('allows a tab this round opened while the setting is on', async () => {

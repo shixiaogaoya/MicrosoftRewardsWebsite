@@ -6,6 +6,9 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 script="$root/.github/scripts/publish-cws.sh"
 export FIXTURE_JQ="$(command -v jq)"
+# Linux images ship only python3, while a Windows Git Bash usually exposes only
+# `python`; take whichever interpreter is present.
+export PYTHON="$(command -v python3 || command -v python)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -34,7 +37,7 @@ EOF
 
 make_zip() {
   local version="$1" path="$2" name="${3:-manifest.json}"
-  python - "$version" "$path" "$name" <<'PY'
+  "$PYTHON" - "$version" "$path" "$name" <<'PY'
 import json, sys, zipfile
 version, path, name = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:

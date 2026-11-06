@@ -101,7 +101,17 @@ export async function runRewards(options: RunOptions = {}): Promise<CommandRecei
     // Record the attempt before any tab opens. A crash after this point still
     // counts as "tried today", so the six-hour alarm does not start a second
     // round. A failure, a cancel and an unconfirmed result are all attempts.
-    for (const kind of pending) await noteAttempt(kind, today);
+    // A write that fails here settles the round it just armed before the
+    // refusal: the run record and its `running` results would otherwise
+    // survive it and block every later start, while the click answered with a
+    // generic refusal that names nothing.
+    try {
+        for (const kind of pending) await noteAttempt(kind, today);
+    } catch {
+        await settleUnresolved(run.id, pending, { status: 'failed', reason: '未能记录任务尝试' });
+        for (const kind of pending) await endRun(run.id, kind);
+        return { accepted: false, reason: '任务启动失败，请重试' };
+    }
 
     const wantsDashboard = pending.includes('daily') || pending.includes('claim');
     if (wantsDashboard) {
