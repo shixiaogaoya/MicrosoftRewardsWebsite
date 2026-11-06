@@ -7,6 +7,7 @@ import { fakeBrowser } from 'wxt/testing';
 import App from '@/entrypoints/popup/App';
 import { StorageValues } from '@/entrypoints/enums/storageValues';
 import { setStorageItem } from '@/entrypoints/hooks/useStorage';
+import { RESULTS_KEY } from '@/entrypoints/utils/runState';
 
 // The short-gap warning and the first-result note are copy, so what regresses
 // is the phrasing: the 30s threshold must stay a recommendation whose crediting
@@ -147,5 +148,137 @@ describe('App 设置读取失败时禁用编辑控件', () => {
         expect(recovered?.disabled).toBe(false);
         expect(recovered?.value).toBe('5');
         expect(host.querySelector<HTMLInputElement>('#autoRunEnabled')?.disabled).toBe(false);
+    });
+});
+
+// A single-task retry starts a round on the stored settings, just like the main
+// start button. The repro: a failed search leaves a retry on its row, an edit's
+// write to sync storage fails, and back on the home view the start button is
+// already blocked — the retry used to fire anyway, running the round on the old
+// stored values while the screen showed the unsaved ones.
+describe('App 设置未就绪时的单项重试', () => {
+    let host: HTMLDivElement;
+    let root: Root;
+
+    beforeEach(async () => {
+        fakeBrowser.reset();
+        // A failed search from an earlier round is what puts a retry button on a row.
+        await setStorageItem(RESULTS_KEY, { search: { status: 'failed', reason: '页面未能打开' } }, StorageValues.LOCAL);
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        root = createRoot(host);
+        await act(async () => {
+            root.render(<App />);
+        });
+    });
+
+    afterEach(() => {
+        act(() => root.unmount());
+        host.remove();
+        vi.restoreAllMocks();
+    });
+
+    async function tick(): Promise<void> {
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+    }
+
+    async function waitFor(cond: () => boolean, limit = 20): Promise<void> {
+        for (let i = 0; i < limit && !cond(); i++) await tick();
+    }
+
+    async function openSettings(): Promise<void> {
+        await waitFor(() => host.querySelector('.advanced-row') != null);
+        act(() => {
+            host.querySelector<HTMLButtonElement>('.advanced-row')!.click();
+        });
+        await waitFor(() => host.querySelector('#searches') != null);
+        // The hook holds every write back until its read has landed, so an edit
+        // made in that window would be dropped — let the reads finish first.
+        await tick();
+        await tick();
+    }
+
+    function typeInto(id: string, text: string): void {
+        act(() => {
+            const el = host.querySelector<HTMLInputElement>(`#${id}`)!;
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+            setter?.call(el, text);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    }
+
+    function startButton(): HTMLButtonElement | null {
+        return host.querySelector<HTMLButtonElement>('#button');
+    }
+
+    function retryButton(): HTMLButtonElement | null {
+        return host.querySelector<HTMLButtonElement>('.task-retry');
+    }
+
+    it('保存失败后重试与主按钮同样受限，处理函数自身也不发送', async () => {
+        const send = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockResolvedValue({ accepted: true } as never);
+        // The edit's write to sync storage is what fails and strands the screen
+        // on values storage never took.
+        vi.spyOn(fakeBrowser.storage.sync, 'set').mockRejectedValue(new Error('write failed'));
+
+        await openSettings();
+        typeInto('searches', '10');
+        await waitFor(() => (host.textContent ?? '').includes('保存失败'));
+        act(() => {
+            host.querySelector<HTMLButtonElement>('.back-button')!.click();
+        });
+
+        // The repro's own ground: the failure is on screen and the main start
+        // button is already blocked on it.
+        expect(host.textContent).toContain('保存失败');
+        expect(startButton()?.disabled).toBe(true);
+
+        const retry = retryButton();
+        expect(retry).not.toBeNull();
+        // dispatchEvent reaches the handler where the disabled attribute would
+        // stop a real click, so this exercises the handler's own guard.
+        await act(async () => {
+            retry!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+        expect(send).not.toHaveBeenCalled();
+        expect(retry?.disabled).toBe(true);
+    });
+
+    it('保存中的重试同样受限，保存成功后恢复', async () => {
+        const send = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockResolvedValue({ accepted: true } as never);
+        const writers: Array<() => void> = [];
+        vi.spyOn(fakeBrowser.storage.sync, 'set').mockImplementation(() => new Promise<void>((resolve) => {
+            writers.push(resolve);
+        }));
+
+        await openSettings();
+        typeInto('searches', '10');
+        await waitFor(() => (host.textContent ?? '').includes('正在保存'));
+        act(() => {
+            host.querySelector<HTMLButtonElement>('.back-button')!.click();
+        });
+
+        // While the write is in flight the retry is held like the start button.
+        expect(startButton()?.disabled).toBe(true);
+        const held = retryButton();
+        expect(held).not.toBeNull();
+        expect(held?.disabled).toBe(true);
+        await act(async () => {
+            held!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+        expect(send).not.toHaveBeenCalled();
+
+        // The write lands, so the stored settings match the screen again and
+        // the row's retry comes back.
+        act(() => {
+            writers.forEach((resolve) => resolve());
+        });
+        await waitFor(() => retryButton()?.disabled === false);
+        await act(async () => {
+            retryButton()!.click();
+        });
+        expect(send).toHaveBeenCalledWith({ action: 'popup', only: ['search'] });
     });
 });

@@ -28,9 +28,9 @@ describe('TaskResults retry', () => {
     host.remove();
   });
 
-  function render(results: TaskResults, isRunning = false): void {
+  function render(results: TaskResults, isRunning = false, settingsNotReady = false): void {
     act(() => {
-      root.render(<TaskResultsList results={results} isRunning={isRunning} />);
+      root.render(<TaskResultsList results={results} isRunning={isRunning} settingsNotReady={settingsNotReady} />);
     });
   }
 
@@ -106,5 +106,27 @@ describe('TaskResults retry', () => {
     render({ daily: { status: 'completed' } }, false);
 
     expect(host.textContent).not.toContain('该任务已关闭，请在设置中开启');
+  });
+
+  // A retry runs on the stored settings, so the settings' read/save state gates
+  // it the way it gates the main start button. dispatchEvent reaches the
+  // handler where the disabled attribute would stop a real click, so the
+  // handler's own guard is what stops the send.
+  it('holds the retry while the settings are not ready and releases it when they are', async () => {
+    answeredWith({ accepted: true });
+    render({ daily: { status: 'failed', reason: '页面未能打开' } }, false, true);
+
+    expect(retryButton().disabled).toBe(true);
+    await act(async () => {
+      retryButton().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(fakeBrowser.runtime.sendMessage).not.toHaveBeenCalled();
+
+    render({ daily: { status: 'failed', reason: '页面未能打开' } }, false, false);
+    expect(retryButton().disabled).toBe(false);
+    await act(async () => {
+      retryButton().click();
+    });
+    expect(fakeBrowser.runtime.sendMessage).toHaveBeenCalledWith({ action: 'popup', only: ['daily'] });
   });
 });

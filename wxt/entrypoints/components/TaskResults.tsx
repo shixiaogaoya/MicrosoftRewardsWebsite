@@ -34,26 +34,30 @@ const TONE: Record<TaskStatus, Tone> = {
 interface TaskResultsProps {
     results: TaskResults;
     isRunning: boolean;
+    // A retry starts a round on the stored settings, so it shares the main
+    // start button's gate: a value still being read, or one whose write has
+    // not gone through, is not a value a round may run on.
+    settingsNotReady?: boolean;
 }
 
 // One row per task that this round actually ran. A task that was not selected
 // is absent, so it is not shown as "not needed". The reason and the retry
 // control sit inline: a collapsed duplicate of the same list added a click
 // without adding information.
-function TaskResultsList({ results, isRunning }: TaskResultsProps) {
+function TaskResultsList({ results, isRunning, settingsNotReady }: TaskResultsProps) {
     const rows = ORDER.filter((kind) => results[kind]);
     if (rows.length === 0) return null;
 
     return (
         <ul className="task-results">
             {rows.map((kind) => (
-                <TaskRow key={kind} kind={kind} result={results[kind]!} isRunning={isRunning} />
+                <TaskRow key={kind} kind={kind} result={results[kind]!} isRunning={isRunning} settingsNotReady={settingsNotReady} />
             ))}
         </ul>
     );
 }
 
-function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResult; isRunning: boolean }) {
+function TaskRow({ kind, result, isRunning, settingsNotReady }: { kind: TaskKind; result: TaskResult; isRunning: boolean; settingsNotReady?: boolean }) {
     // The retry asks the background and shows its answer on the row it belongs
     // to. A task whose toggle was switched off after it ran is refused — told
     // so, not silently ignored, and never switched back on by the retry itself.
@@ -68,9 +72,12 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
     // double click sends one command instead of a second one to be refused.
     const [pending, setPending] = useState(false);
     const canRetry = !isRunning && (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'cancelled');
+    // The gate is checked in the handler as well as on the button: a click can
+    // be dispatched around the disabled attribute.
+    const retryBlocked = pending || settingsNotReady;
     const tone = TONE[result.status];
     async function retryTask(): Promise<void> {
-        if (pending) return;
+        if (retryBlocked) return;
         setRejection(null);
         setPending(true);
         try {
@@ -93,7 +100,7 @@ function TaskRow({ kind, result, isRunning }: { kind: TaskKind; result: TaskResu
                     <span className="task-actions">
                         <span className={`task-status task-status--${result.status === 'failed' ? 'error' : tone}`}>{STATUS_TEXT[result.status]}</span>
                         {canRetry && (
-                            <button type="button" className="task-retry" onClick={retryTask} disabled={pending} aria-disabled={pending} aria-label={`重试${LABELS[kind]}`}>
+                            <button type="button" className="task-retry" onClick={retryTask} disabled={retryBlocked} aria-disabled={retryBlocked} aria-label={`重试${LABELS[kind]}`}>
                                 <Icon name="rotate-ccw" />
                             </button>
                         )}

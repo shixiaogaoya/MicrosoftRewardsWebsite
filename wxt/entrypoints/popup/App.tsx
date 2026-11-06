@@ -330,7 +330,7 @@ function App() {
                         <h2 id="results-heading" className="card-title">任务进度</h2>
                         {handlingCount > 0 && <span className="card-head-note">{handlingCount} 项需处理</span>}
                     </div>
-                    <TaskResultsList results={results} isRunning={isRunning} />
+                    <TaskResultsList results={results} isRunning={isRunning} settingsNotReady={settingsNotReady} />
                 </section>
             )}
 
