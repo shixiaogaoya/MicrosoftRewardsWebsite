@@ -181,7 +181,7 @@ GitHub Actions 支持在线构建和 GitHub Release。工作流名为「在线�
 
 `master` 构建成功并创建正式 Release 后，构建工作流会调用「发布到 Chrome 网上应用店」（`.github/workflows/publish-cws.yml`），**自动上传该 Release 的 Chrome ZIP 并提交审核**。ZIP 直接取自 Release，不重新构建。发布新版本时，更新 `wxt/package.json` 和锁文件中的版本，推送到 `master`，或在 GitHub 上从 `master` 手动运行构建并勾选确认项即可，无需再手动触发商店工作流。
 
-如果 Release 已存在，只有其标签仍指向**本次构建的同一提交**，才会复用 Release 并继续商店步骤。这允许同一提交的工作流重跑补做上传或提审；同一版本之后的普通提交、标签推送、预发布和前置失败不会自动提审。审核通过后仍需手动上线。
+如果 Release 已存在，只有其标签仍指向**本次构建的同一提交**，才会复用 Release 并继续商店步骤。这允许同一提交的工作流重跑补做上传或提审；同一版本之后的普通提交、标签推送、预发布和前置失败不会自动提审。新提交使用“审核通过后自动发布”，无需在审核结束后手动上线。
 
 自动入口通过同一构建流程中的可复用工作流调用，不依赖 Release 事件触发。商店工作流也保留手动入口，可用于读取状态或重新提交指定 Release。自动与手动入口共用校验、状态保护和并发锁。
 
@@ -212,9 +212,11 @@ Google 侧目前只允许 `shixiaogaoya/MicrosoftRewardsWebsite` 仓库的 `mast
 - 同一版本已在审核中（PENDING_REVIEW）、已通过审核等待上线（STAGED），或已发布时，成功结束并说明已完成，不再上传或提审。
 - 其他版本正在审核、已有其他版本处于 STAGED、审核版本无法确认、条目被下架，或仍有上传在处理中时，明确失败，不覆盖现有操作。
 - 上传返回 `IN_PROGRESS` 时只在限定次数与间隔内轮询 `fetchStatus`，确认 `SUCCEEDED` 后才提审；超时或失败一律不提审。
-- 提审请求体固定为 `{"publishType":"STAGED_PUBLISH","skipReview":false,"blockOnWarnings":true}`。
+- 提审请求体固定为 `{"publishType":"DEFAULT_PUBLISH","skipReview":false,"blockOnWarnings":true}`。
 
-商店相关运行通过 concurrency 串行执行，且 `cancel-in-progress: false`：已经发出的上传或提审不会被新运行取消。`submit` 成功后 CI 即结束，**不等待人工审核**；审核通过后还需要在开发者后台手动点击上线。读取状态和提交审核是两件不同的事，运行成功只代表请求已被商店接受，不代表扩展已经上线。
+商店相关运行通过 concurrency 串行执行，且 `cancel-in-progress: false`：已经发出的上传或提审不会被新运行取消。`submit` 成功后 CI 即结束，**不等待人工审核**；Google 审核通过后由商店自动上线，无需额外的定时任务或手动发布。读取状态和提交审核是两件不同的事，运行成功只代表请求已被商店接受，不代表扩展已经上线。
+
+此策略用于后续新提交，不会改变已经按旧策略送审的版本。旧策略下处于 STAGED 的版本仍需在开发者后台手动上线；同版本重跑会保留现有状态，不会重新上传、提审或自动上线。
 
 若商店任务失败，已经创建的 GitHub Release 会保留。排除阻塞后可重跑同一提交的整个构建工作流，或重跑失败的商店作业；无需为重试提升版本。若修复已经产生新提交，可手动使用 `submit` 和原来的 `release_tag`。同一版本已在审核或已发布时会跳过重复操作。
 

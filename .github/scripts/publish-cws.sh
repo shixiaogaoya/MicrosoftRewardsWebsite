@@ -383,8 +383,9 @@ submit_mode() {
     *) fail "无法识别的上传结果：${upload_state:-<empty>}，不会提审" ;;
   esac
 
-  # The payload is fixed: staged publishing, real review, warnings block.
-  printf '%s' '{"publishType":"STAGED_PUBLISH","skipReview":false,"blockOnWarnings":true}' > "$CWS_PUBLISH_BODY"
+  # The payload is fixed: publish automatically on approval, real review,
+  # warnings block. Google completes the release without a follow-up CI run.
+  printf '%s' '{"publishType":"DEFAULT_PUBLISH","skipReview":false,"blockOnWarnings":true}' > "$CWS_PUBLISH_BODY"
   cws_request POST "${API_ROOT}/v2/publishers/${CWS_PUBLISHER_ID}/items/${CWS_EXTENSION_ID}:publish" "$CWS_PUBLISH_BODY"
   local warnings
   case "$CWS_STATUS" in
@@ -413,10 +414,10 @@ submit_mode() {
     "- Chrome ZIP 校验：根目录 manifest.json，版本 ${zip_version}" \
     "- 商店原状态：已发布版本 ${PUBLISHED_VERSIONS_TEXT:-未发布}；提交状态 $(item_state_label "$SUBMITTED_STATE")${SUBMITTED_VERSIONS_TEXT:+（版本 ${SUBMITTED_VERSIONS_TEXT}）}" \
     "- 上传结果：${upload_result}" \
-    "- 提审请求：STAGED_PUBLISH、skipReview=false、blockOnWarnings=true" \
+    "- 提审请求：DEFAULT_PUBLISH、skipReview=false、blockOnWarnings=true" \
     "- 提审结果：$(item_state_label "$publish_state")" \
     ${warnings:+"- 商店警告："$'\n'"${warnings}"} \
-    "- 后续：CI 到此结束，不等待人工审核；审核通过后需在开发者后台手动点击上线"
+    "- 后续：CI 到此结束，不等待人工审核；审核通过后由商店自动上线，无需手动发布"
   echo "CWS submit completed: ${RELEASE_TAG} -> ${publish_state}"
 }
 

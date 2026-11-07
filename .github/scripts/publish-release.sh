@@ -181,7 +181,7 @@ Rewards 助手 ${package_version}
 - Firefox：下载文件名含 firefox 的 ZIP，按 README 临时载入或安装。
 - GitHub 自动附带的 Source code 归档是源码，请使用上面两份扩展 ZIP。
 
-master 发布流程会上传 Chrome ZIP 并提交商店审核；同一提交重跑时可复用已有 Release 继续商店步骤。审核通过后仍需手动上线。创建 Release 不代表扩展已经在商店上线。使用前请查看仓库 README 的已知问题与验证范围。
+master 发布流程会上传 Chrome ZIP 并提交商店审核；同一提交重跑时可复用已有 Release 继续商店步骤。审核通过后由商店自动上线，无需手动发布。创建 Release 不代表扩展已经在商店上线。使用前请查看仓库 README 的已知问题与验证范围。
 EOF
   # An annotated tag records a tagger, and the runner has no git identity.
   # Pass one explicitly instead of relying on repository or global config.

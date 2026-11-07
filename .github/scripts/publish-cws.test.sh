@@ -412,7 +412,7 @@ echo "PASS submit-staged-ready-without-writes"
 reset_case
 MODE=submit RELEASE_TAG=v3.1.3 run submit
 expect_ok "submit-upload-and-publish"
-[[ "$(cat "$work/case/publish-request.json")" == '{"publishType":"STAGED_PUBLISH","skipReview":false,"blockOnWarnings":true}' ]] \
+[[ "$(cat "$work/case/publish-request.json")" == '{"publishType":"DEFAULT_PUBLISH","skipReview":false,"blockOnWarnings":true}' ]] \
   || { echo "FAIL publish payload"; cat "$work/case/publish-request.json"; exit 1; }
 echo "PASS publish-payload-exact"
 [[ -s "$work/case/uploaded.zip" ]] || { echo "FAIL uploaded ZIP missing"; exit 1; }
