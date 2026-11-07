@@ -16,7 +16,6 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _showWebView = false;
-  late InAppWebViewController _webViewController;
 
   @override
   Widget build(BuildContext context) {
@@ -105,9 +104,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     clearSessionCache: false,
                     clearCache: false,
                   ),
-                  onWebViewCreated: (controller) {
-                    _webViewController = controller;
-                  },
                   onLoadStop: (controller, url) async {
                     if (isSignedInBingUrl(url)) {
                       final prefs = await SharedPreferences.getInstance();

@@ -36,6 +36,22 @@ describe('waitForMatch', () => {
         expect(((await pending) as HTMLElement)?.id).toBe('target');
     });
 
+    // A probe's answer can flip on an attribute edit alone: the flyout's claim
+    // control toggles data-disabled on the same node, and an observer watching
+    // only childList never re-probes that.
+    it('sees a match that appears through an attribute change on an existing node', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<button type="button" data-disabled="true"></button>';
+        const probe = () => (root.querySelector('button')!.getAttribute('data-disabled') === 'false'
+            ? root.querySelector('button')
+            : null);
+        const pending = waitForMatch(probe, 1000, root);
+
+        root.querySelector('button')!.setAttribute('data-disabled', 'false');
+
+        expect(((await pending) as HTMLElement)?.tagName).toBe('BUTTON');
+    });
+
     it('resolves null when the match never appears, instead of hanging', async () => {
         const root = freshRoot();
 

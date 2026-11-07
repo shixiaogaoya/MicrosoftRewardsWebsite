@@ -17,6 +17,21 @@ export interface TaskResult {
     status: TaskStatus;
     // Short, human-readable, and only set when we actually know the cause.
     reason?: string;
+    // The round that wrote this result. The stored results hold each task's
+    // most recent outcome, and a single-task retry replaces only its own row —
+    // without the id the rows left over could be read as one round's work.
+    runId?: number;
+    // When this result was written. Missing on results stored before these
+    // fields existed, which are shown without a time rather than a made-up one.
+    at?: number;
+    // Machine-readable cause, written only by the recognition layer
+    // (a RecognitionCause value from rewardsRecognition) together with the
+    // recognizer version that produced it. The pair is what lets a stored row
+    // be classified without parsing its Chinese display text; a row without
+    // these fields came from the background's timeout/interruption paths,
+    // which are not recognizer output (A08).
+    cause?: string;
+    recognizerVersion?: number;
 }
 
 // What the background answers a start, a stop or a single-task retry with.
@@ -97,3 +112,26 @@ export const MIGRATION_KEY = 'stateMigrationVersion';
 export const LAST_RUN_KEY = 'taskLastRunId';
 
 export const STATE_MIGRATION_VERSION = 1;
+
+// The one round the stored results may be spoken for as: the live round's id
+// when there is one, else the newest round the rows themselves can name. Used
+// to keep rows carried over from earlier rounds (a single-task retry keeps
+// them) out of any "this round" claim, so results from different rounds cannot
+// be stitched into one seemingly complete round.
+export function roundReference(results: TaskResults, runId: number | null): number | null {
+    if (runId != null) return runId;
+    let latest: number | null = null;
+    for (const kind of ['search', 'daily', 'claim'] as const) {
+        const id = results[kind]?.runId;
+        if (id != null && (latest == null || id > latest)) latest = id;
+    }
+    return latest;
+}
+
+// Whether one stored row belongs to the round `roundReference` names. A row
+// with no round mark predates the marking: it is the previous version's last
+// round when nothing is marked (that version rewrote every row each round),
+// and older than every marked row once one is.
+export function belongsToRound(result: TaskResult, reference: number | null): boolean {
+    return result.runId != null ? result.runId === reference : reference == null;
+}

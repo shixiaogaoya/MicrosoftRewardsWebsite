@@ -35,6 +35,9 @@ export function waitForMatch<T>(
             if (match !== null) settle(match);
         });
         const giveUpTimer = setTimeout(() => settle(null), timeoutMs);
-        observer.observe(observeRoot, { childList: true, subtree: true });
+        // `attributes` included: a probe's answer can flip on an attribute edit —
+        // the flyout's claim control toggles a data-disabled attribute on the
+        // same node — not only on nodes being added or removed.
+        observer.observe(observeRoot, { childList: true, subtree: true, attributes: true });
     });
 }

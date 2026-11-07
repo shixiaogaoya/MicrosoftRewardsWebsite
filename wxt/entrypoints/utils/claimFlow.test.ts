@@ -24,13 +24,15 @@ function dashboard({ dialog }: { dialog?: () => string } = {}): HTMLElement {
     return root;
 }
 
-function dialogHtml({ isDisabled = false } = {}): string {
+// `disabled` renders the confirm control with that exact data-disabled value,
+// because the value itself is what the regression cases are about.
+function dialogHtml({ disabled }: { disabled?: string } = {}): string {
     return `
       <section role="dialog">
         <button type="button" slot="close" id="close"></button>
         <button type="button" id="claim">
           <img alt="Points" src="${CLAIM_ICON}">
-          <div${isDisabled ? ' data-disabled="true"' : ''}><span>Claim points</span></div>
+          <div${disabled != null ? ` data-disabled="${disabled}"` : ''}><span>Claim points</span></div>
         </button>
       </section>`;
 }
@@ -58,18 +60,20 @@ describe('claimPoints', () => {
     // guard on scoping the second search to the dialog — the card stays in the
     // DOM behind the flyout carrying the same icon, so an unscoped search would
     // find the trigger again and press it a second time.
-    it('presses the card, then claim in the flyout, then dismisses it', async () => {
+    it('presses the card, then claim in the flyout; the click stays unverified', async () => {
         const root = dashboard({ dialog: () => dialogHtml() });
         const clicked = recordClicks(root);
 
         const outcome = await runToCompletion(claimPoints(root));
 
-        expect(outcome).toBe('unconfirmed');
+        expect(outcome).toBe('clickedUnverified');
         expect(clicked).toEqual(['card', 'claim']);
     });
 
-    // A click that is answered by a state we can see is the only 'claimed'.
-    it('reports claimed once the confirm button becomes disabled', async () => {
+    // A08 完成判据：点击后控件禁用不能确认领取成功——请求处理中的临时禁用
+    // 与领取完成的禁用在 DOM 上不可区分，没有经样本证实的完成标记之前，
+    // 结果一律待确认（'clickedUnverified'）。
+    it('does not report a claim when the confirm button only becomes disabled', async () => {
         const root = dashboard({ dialog: () => dialogHtml() });
         root.addEventListener('click', (event) => {
             const button = (event.target as HTMLElement).closest('#claim');
@@ -79,20 +83,49 @@ describe('claimPoints', () => {
 
         const outcome = await runToCompletion(claimPoints(root));
 
-        expect(outcome).toBe('claimed');
+        expect(outcome).toBe('clickedUnverified');
         expect(clicked).toEqual(['card', 'claim', 'close']);
     });
 
     // The points were already claimed today. Pressing anyway is the one outcome
     // worth being careful about, since it acts on a live account.
     it('does not press claim when the flyout reports nothing pending', async () => {
-        const root = dashboard({ dialog: () => dialogHtml({ isDisabled: true }) });
+        const root = dashboard({ dialog: () => dialogHtml({ disabled: 'true' }) });
         const clicked = recordClicks(root);
 
         const outcome = await runToCompletion(claimPoints(root));
 
         expect(outcome).toBe('nothingToClaim');
         expect(clicked).toEqual(['card', 'close']);
+    });
+
+    // A08 完成判据（点击前路径）：控件刚随弹层出现时的禁用可能只是加载中，
+    // 读取那一瞬间的快照会把临时状态当成“无需执行”。必须先有界等待它变为
+    // 可领取；整个窗口内持续禁用才报 nothingToClaim。
+    it('waits out a control that is disabled only while the flyout is loading', async () => {
+        const root = dashboard({ dialog: () => dialogHtml({ disabled: 'true' }) });
+        const clicked = recordClicks(root);
+
+        const pending = claimPoints(root);
+        await vi.advanceTimersByTimeAsync(1000);
+        root.querySelector('#claim [data-disabled]')!.setAttribute('data-disabled', 'false');
+        const outcome = await runToCompletion(pending);
+
+        expect(outcome).toBe('clickedUnverified');
+        expect(clicked).toEqual(['card', 'claim']);
+    });
+
+    // Regression (F05): a `data-disabled` attribute of any value used to read as
+    // "nothing pending". With the value explicitly "false" the control is
+    // usable, so the claim is pressed — not skipped as a false "not needed".
+    it('presses claim when the flyout control is data-disabled="false"', async () => {
+        const root = dashboard({ dialog: () => dialogHtml({ disabled: 'false' }) });
+        const clicked = recordClicks(root);
+
+        const outcome = await runToCompletion(claimPoints(root));
+
+        expect(outcome).toBe('clickedUnverified');
+        expect(clicked).toEqual(['card', 'claim']);
     });
 
     it('gives up rather than hanging when the dashboard has no claim card', async () => {
@@ -141,7 +174,7 @@ describe('claimPoints', () => {
 
         const outcome = await runToCompletion(claimPoints(root));
 
-        expect(outcome).toBe('unconfirmed');
+        expect(outcome).toBe('clickedUnverified');
         expect(clicked).toEqual(['card', 'claim']);
     });
 });

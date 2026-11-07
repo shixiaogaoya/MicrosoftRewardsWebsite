@@ -22,14 +22,25 @@ export function findClaimButton(root: ParentNode): HTMLButtonElement | null {
     return null;
 }
 
+// A `data-disabled` attribute used to count as "not claimable" whatever its
+// value (F05). A control carrying `data-disabled="false"` is explicitly usable,
+// and reading it as disabled skipped a real claim as "nothing to do".
+function marksDisabled(el: Element): boolean {
+    const value = el.getAttribute('data-disabled');
+    return value !== null && value !== 'false';
+}
+
 // Whether pressing the button would actually claim anything. Once the points are
 // claimed the markup is unchanged apart from `data-disabled="true"` on the inner
 // pill, which is a cheaper and more robust signal than reading the points total
 // or the "Pending" badge. The element's own disabled markers are checked too, in
 // case the flyout ever moves the state up to the button.
 export function isClaimable(button: HTMLButtonElement): boolean {
-    if (button.disabled || button.hasAttribute('data-disabled')) return false;
-    return button.querySelector('[data-disabled="true"]') === null;
+    if (button.disabled || marksDisabled(button)) return false;
+    for (const marked of button.querySelectorAll('[data-disabled]')) {
+        if (marksDisabled(marked)) return false;
+    }
+    return true;
 }
 
 // The flyout's dismiss control. `aria-label="Close"` is localised; the slot the

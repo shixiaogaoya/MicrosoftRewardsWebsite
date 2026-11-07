@@ -119,7 +119,7 @@ describe('searchRunner', () => {
       await handleAlarmStep(stepAlarm(runId, 2));
 
       expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
-        search: { status: 'failed', reason: 'tab creation failed' },
+        search: expect.objectContaining({ status: 'failed', reason: 'tab creation failed' }),
       });
       expect((await getStorageItem<RunProgress>(PROGRESS_KEY, StorageValues.LOCAL))?.isSearching).toBe(false);
       expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
@@ -272,7 +272,7 @@ describe('searchRunner', () => {
       await finishSearch(runId, { status: 'failed', reason: 'tab creation failed' });
 
       expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
-        search: { status: 'failed', reason: 'tab creation failed' },
+        search: expect.objectContaining({ status: 'failed', reason: 'tab creation failed' }),
       });
       expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     });
@@ -517,7 +517,7 @@ describe('searchRunner', () => {
 
       expect(remove).toHaveBeenCalledWith(createdTabId);
       expect(await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)).toEqual({
-        search: { status: 'failed', reason: 'run record write failed' },
+        search: expect.objectContaining({ status: 'failed', reason: 'run record write failed' }),
       });
       expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
     });

@@ -14,6 +14,9 @@ export interface SearchProgressState {
     total: number;
     isRunning: boolean;
     phase: TaskRunState['phase'] | null;
+    // The live round's id, so a view can tell this round's own result rows
+    // apart from the previous rounds' kept ones. Null while nothing runs.
+    runId: number | null;
     results: TaskResults;
 }
 
@@ -24,6 +27,7 @@ const INITIAL: SearchProgressState = {
     total: 0,
     isRunning: false,
     phase: null,
+    runId: null,
     results: {},
 };
 
@@ -46,6 +50,7 @@ export function useSearchProgress(): SearchProgressState {
                 total: view.total,
                 isRunning: run != null,
                 phase: run?.phase ?? null,
+                runId: run?.id ?? null,
                 results: results ?? {},
             });
         }
@@ -69,7 +74,7 @@ export function useSearchProgress(): SearchProgressState {
                 }))
             ),
             storage.watch<TaskRunState>(`local:${RUN_KEY}`, (value) =>
-                setState((prev) => ({ ...prev, isRunning: value != null, phase: value?.phase ?? null }))
+                setState((prev) => ({ ...prev, isRunning: value != null, phase: value?.phase ?? null, runId: value?.id ?? null }))
             ),
             storage.watch<TaskResults>(`local:${RESULTS_KEY}`, (value) =>
                 setState((prev) => ({ ...prev, results: value ?? {} }))

@@ -39,6 +39,13 @@ async function write(state: TaskRunState | null): Promise<void> {
     await setStorageItem(RUN_KEY, state, StorageValues.LOCAL);
 }
 
+// Every result the background writes carries the round that produced it and
+// the moment it was written, so the popup can tell a previous round's kept
+// result (shown with its own time) apart from the current round's own rows.
+function stamped(runId: number, result: TaskResult): TaskResult {
+    return { ...result, runId, at: Date.now() };
+}
+
 export async function currentRun(): Promise<TaskRunState | null> {
     return enqueue(read);
 }
@@ -55,7 +62,7 @@ export function abandonRun(reason: string): Promise<void> {
         const kinds: TaskKind[] = ['search', 'daily', 'claim'];
         for (const kind of kinds) {
             if (state[kind] && (!results[kind] || results[kind]?.status === 'running')) {
-                results[kind] = { status: 'unconfirmed', reason };
+                results[kind] = stamped(state.id, { status: 'unconfirmed', reason });
             }
         }
         await setStorageItem(RESULTS_KEY, results, StorageValues.LOCAL);
@@ -101,8 +108,22 @@ export function beginRun(kinds: TaskKind[], config: RunConfig): Promise<{ id: nu
         const previous = (await getStorageItem<number>(LAST_RUN_KEY, StorageValues.LOCAL)) ?? 0;
         const id = Math.max(Date.now(), previous + 1);
         await setStorageItem(LAST_RUN_KEY, id, StorageValues.LOCAL);
+        // The stored results are each task's most recent outcome, not this
+        // round's scratchpad. A single-task retry starts a round that runs only
+        // one task, and the others keep their last result — stamped with the
+        // round and time it came from — instead of being wiped by the new round.
+        // A row still `running` belongs to a round whose record is already gone
+        // (this beginRun only runs then): no result ever settled it, so it is
+        // dropped rather than shown as in flight for a round that no longer
+        // exists.
+        const earlier = (await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)) ?? {};
         const results: TaskResults = {};
-        for (const kind of kinds) results[kind] = { status: 'running' };
+        for (const kind of ['search', 'daily', 'claim'] as const) {
+            if (kinds.includes(kind)) continue;
+            const kept = earlier[kind];
+            if (kept && kept.status !== 'running') results[kind] = kept;
+        }
+        for (const kind of kinds) results[kind] = { status: 'running', runId: id };
         await write({
             id,
             phase: 'running',
@@ -157,7 +178,7 @@ export function recordResult(runId: number, kind: TaskKind, result: TaskResult):
         if (!state || state.id !== runId) return false;
         const results = (await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL)) ?? {};
         if (results[kind]?.status && results[kind]?.status !== 'running') return false;
-        results[kind] = result;
+        results[kind] = stamped(runId, result);
         await setStorageItem(RESULTS_KEY, results, StorageValues.LOCAL);
         return true;
     });
@@ -177,7 +198,7 @@ export function settleUnresolved(runId: number, kinds: TaskKind[], result: TaskR
             if (!state[kind]) continue;
             const current = results[kind];
             if (current && current.status !== 'running') continue;
-            results[kind] = result;
+            results[kind] = stamped(runId, result);
             changed = true;
         }
         if (changed) await setStorageItem(RESULTS_KEY, results, StorageValues.LOCAL);

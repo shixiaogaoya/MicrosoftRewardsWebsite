@@ -14,8 +14,9 @@ import SearchPresetSelect from '@/entrypoints/components/SearchPresetSelect';
 import ManualClaimButton from '@/entrypoints/components/ManualClaimButton';
 import SearchProgressBar from '@/entrypoints/components/SearchProgressBar';
 import TaskResultsList from '@/entrypoints/components/TaskResults';
+import DiagnosticsPanel from '@/entrypoints/components/DiagnosticsPanel';
 import Icon from '@/entrypoints/components/Icon';
-import { combinedLoad, combinedSave, countNeedsHandling, nextRoundSummary, statusView } from './status';
+import { combinedLoad, combinedSave, countNeedsHandling, nextRoundSummary, resultsOfRound, statusView } from './status';
 
 // The fork's own Chinese README, not the upstream one: the behaviour documented
 // there (stopping a round, the auto-run switch, 已发起 versus 到账) is this fork's.
@@ -56,12 +57,14 @@ function App() {
     const setAutoRunEnabled = autoRunStore.setValue;
     const [stopRequested, setStopRequested] = useState(false);
     // The settings live on their own view: the popup is one document, so this is
-    // a view switch rather than a route.
+    // a view switch rather than a route. The diagnostics view sits behind the
+    // settings, keeping the ordinary interface free of technical fields.
     const [showSettings, setShowSettings] = useState(false);
+    const [showDiagnostics, setShowDiagnostics] = useState(false);
     const [attempts, setAttempts] = useState<TaskAttempts>({});
     const [nextCheck, setNextCheck] = useState<number | null>(null);
     const [frozenConfig, setFrozenConfig] = useState<RunConfig | null>(null);
-    const { isLoaded, isSearching, completed, total, isRunning, phase, results } = useSearchProgress();
+    const { isLoaded, isSearching, completed, total, isRunning, phase, runId, results } = useSearchProgress();
 
     const searches = clampSetting('searches', searchesStored);
     const timeout = clampSetting('timeout', timeoutStored);
@@ -180,6 +183,21 @@ function App() {
     const displaySearches = isRunning && frozenConfig ? frozenConfig.searches : searches;
     const displayTimeout = isRunning && frozenConfig ? frozenConfig.timeout : timeout;
 
+    // Opened from the settings view; "返回" goes back there.
+    if (showDiagnostics) {
+        return (
+            <main className="popup">
+                <header className="settings-header">
+                    <button type="button" className="back-button" onClick={() => setShowDiagnostics(false)} aria-label="返回">
+                        <Icon name="arrow-left" size="medium" />
+                    </button>
+                    <h1 className="settings-heading">诊断信息</h1>
+                </header>
+                <DiagnosticsPanel results={results} />
+            </main>
+        );
+    }
+
     if (showSettings) {
         return (
             <main className="popup">
@@ -277,6 +295,13 @@ function App() {
                     使用说明
                     <Icon name="external-link" />
                 </a>
+                <button type="button" className="advanced-row" id="diagnosticsEntry" onClick={() => setShowDiagnostics(true)}>
+                    <span className="advanced-text">
+                        <span className="advanced-title">诊断信息</span>
+                        <span className="advanced-sub">预览并导出反馈问题用的脱敏快照</span>
+                    </span>
+                    <Icon name="chevron-right" />
+                </button>
             </main>
         );
     }
@@ -299,7 +324,7 @@ function App() {
                 </div>
                 <p className="round-note">
                     {isRunning
-                        ? runningSummary(results, displaySearches, displayTimeout)
+                        ? runningSummary(resultsOfRound(results, runId), displaySearches, displayTimeout)
                         : nextRoundSummary({ search: active, daily: autoDaily, claim: claimPoints, searches, timeout })}
                 </p>
                 {settingsDirtyWhileRunning && (
@@ -330,7 +355,7 @@ function App() {
                         <h2 id="results-heading" className="card-title">任务进度</h2>
                         {handlingCount > 0 && <span className="card-head-note">{handlingCount} 项需处理</span>}
                     </div>
-                    <TaskResultsList results={results} isRunning={isRunning} settingsNotReady={settingsNotReady} />
+                    <TaskResultsList results={results} isRunning={isRunning} runId={runId} settingsNotReady={settingsNotReady} />
                 </section>
             )}
 
@@ -438,7 +463,10 @@ function AutoRunNote({ enabled, attempts, nextCheck }: {
     return (
         <div className="auto-note">
             <p className="field-note">浏览器启动时检查，之后约每 6 小时检查</p>
-            {tried.length > 0 && <p className="field-note">今日已尝试：{tried.join('、')}</p>}
+            <p className="field-note">每日活动与领取会在前台打开 Rewards 页面执行，运行期间会临时切换标签页；结束后回到原来的标签页，若你在运行中切换了页面则保持当前页面不动。</p>
+            {tried.length > 0 && (
+                <p className="field-note">今日已尝试：{tried.join('、')}。已尝试不等于已完成；无论结果如何，当日自动检查不会再试，可用「开始任务」或对应任务的重试按钮手动执行。</p>
+            )}
             {nextCheck != null && <p className="field-note">下次检查：{CHECK_TIME.format(nextCheck)}</p>}
         </div>
     );

@@ -20,17 +20,25 @@ class SearchBloc extends Bloc<SearchEvent, SearchState> {
       Emitter<SearchState> emit,
       ) async {
     emit(SearchInProgress());
-    _cancelToken = SearchCancellationToken();
+    final cancelToken = SearchCancellationToken();
+    _cancelToken = cancelToken;
     try {
       await performSearch(
         count: event.count,
         delay: event.delay,
-        cancellationToken: _cancelToken,
+        cancellationToken: cancelToken,
         controller: event.controller,
         onProgress: (currentCount, totalCount) {
           emit(SearchInProgress(currentCount: currentCount, totalCount: event.count));
         },
       );
+      // 取消时 _onCancelSearch 已写出 SearchCancelled；底层循环在取消后 break
+      // 并正常返回，这里不得再写出 SearchSuccess 把取消覆盖成成功。
+      // 使用本地的 cancelToken 而非 _cancelToken，避免新一轮开始后旧轮次
+      // 读到新令牌而误判为未取消。
+      if (cancelToken.isCancelled) {
+        return;
+      }
       emit(SearchSuccess());
     } catch (e) {
       emit(SearchFailure(ErrorHandler.getErrorMessage(e)));

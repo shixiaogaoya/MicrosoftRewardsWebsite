@@ -210,7 +210,7 @@ button, input, select {
     background: var(--success-bg);
 }
 
-.round-note, .field-note, .field-warning, .task-reason {
+.round-note, .field-note, .field-warning, .task-reason, .task-meta {
     margin: 0;
     font-size: var(--font-12);
     color: var(--muted);
@@ -386,6 +386,11 @@ button, input, select {
 }
 
 .task-reason {
+    margin-top: var(--space-4);
+}
+
+/* The provenance note on a kept result: which round it came from, and when. */
+.task-meta {
     margin-top: var(--space-4);
 }
 
@@ -704,6 +709,27 @@ button, input, select {
     text-decoration: underline;
     text-underline-offset: var(--space-4);
     cursor: pointer;
+}
+
+/* The diagnostics preview shows exactly what the export writes out, so it stays
+   a plain, scrollable block of the JSON text rather than a rendered table. */
+.diag-preview {
+    max-height: 260px;
+    margin: var(--space-8) 0 0;
+    padding: var(--space-8);
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: var(--font-12);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text);
+    background: var(--soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+}
+
+.card .diag-preview + .btn {
+    margin-top: var(--space-12);
 }
 
 @media (max-width: 320px) {
