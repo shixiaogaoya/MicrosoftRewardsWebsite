@@ -1,0 +1,31 @@
+<!--
+  脱敏样本：未登录状态下 rewards.bing.com 的页面结构（A08 匿名只读检查）。
+  来源：2026-11-07，无头 Chrome 匿名加载 https://rewards.bing.com/（未登录、未点击，
+  隔离配置目录），页面为中文营销页“关于 – Microsoft Rewards”。
+  只保留识别器读取的结构事实：
+    1. 登录入口是同源相对路径 /auth/login（未登录页上不出现 login.live.com 链接）；
+    2. 营销页的 div.grid 里存在带 form 参数的推广链接（Microsoft Edge / Store），
+       形状上会被“div.grid > a + form 参数”的卡片发现规则误当成每日活动卡片。
+  已删除：脚本、内联样式、React 水合数据、哈希 class、图标与跟踪参数；链接仅保留识别器会读取的
+  特征——form 参数、原始路径，以及 bing.com/?rwgbopen=1 里原始链接自带的静态常量 rwgbopen=1
+  （不含用户标识）。采样时未登录，样本不含账号、Cookie、Token 或会话数据。
+-->
+<header>
+  <nav>
+    <a href="/dashboard">仪表板</a>
+    <a href="/redeem">兑换</a>
+    <a href="/earn">赚取积分</a>
+    <a href="/auth/login" aria-label="登录">登录</a>
+  </nav>
+</header>
+<main>
+  <section>
+    <h2>了解赚取积分的方法</h2>
+    <div class="grid">
+      <a href="https://bing.com/?rwgbopen=1">立即加入</a>
+      <a href="https://www.xbox.com/Rewards">Xbox Rewards</a>
+      <a href="https://www.microsoft.com/edge/?form=MA13RE">了解 Microsoft Edge</a>
+      <a href="https://www.microsoft.com/store?form=ML2XEG">Microsoft Store</a>
+    </div>
+  </section>
+</main>

@@ -137,7 +137,9 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
       );
     }
-    if (state is SearchFailure || state is SearchSuccess) {
+    if (state is SearchFailure || state is SearchSuccess || state is SearchCancelled) {
+      // 取消、失败和完成都必须释放屏幕常亮；取消不会再被 SearchSuccess
+      // 覆盖，因此这里必须显式包含 SearchCancelled。
       WakelockPlus.disable();
     }
   }
@@ -181,6 +183,9 @@ class SearchFormState extends State<SearchForm> {
 
   @override
   void dispose() {
+    // 页面退出时兜底释放屏幕常亮，避免搜索进行中离开页面后常亮残留；
+    // 未开启常亮时重复调用没有副作用。
+    WakelockPlus.disable();
     _countController.dispose();
     _delayController.dispose();
     _webViewController?.dispose();

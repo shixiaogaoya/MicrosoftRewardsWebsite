@@ -17,14 +17,12 @@ permissions:
 
 jobs:
   build:
+    # Single verification round per commit: this workflow is the only verifier
+    # for master pushes (ci.yml only runs its extension job on pull requests)
+    # and for tag/manual runs, which have no ci.yml backing at all. Typecheck
+    # and tests run once, then both browser targets are packaged sequentially;
+    # `wxt zip` builds before zipping, so each target is still fully built.
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - browser: chrome
-            script: zip
-          - browser: firefox
-            script: zip:firefox
 
     defaults:
       run:
@@ -35,19 +33,36 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: 验证发布与商店提审脚本（模拟，不访问外部服务）
+        shell: bash
+        working-directory: .
+        run: |
+          bash .github/scripts/publish-release.test.sh
+          bash .github/scripts/publish-cws.test.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: wxt/package-lock.json
 
       - run: npm ci
       - run: npm run compile
       - run: npm run test
-      - run: npm run ${{ matrix.script }}
+      # Both targets are packaged: the Chrome (MV3) and Firefox (MV2) outputs
+      # differ enough that one passing does not imply the other does.
+      - run: npm run zip
+      - run: npm run zip:firefox
 
       - uses: actions/upload-artifact@v7
         with:
-          name: extension-${{ matrix.browser }}
-          path: wxt/dist/*.zip
+          name: extension-chrome
+          path: wxt/dist/*-chrome.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: extension-firefox
+          path: wxt/dist/*-firefox.zip
           if-no-files-found: error
 
   release:
@@ -63,6 +78,10 @@ jobs:
     permissions:
       actions: read
       contents: write
+      # The Release notes list merged PRs to attribute entries; without this
+      # scope gh pr list fails and the publish aborts before creating the
+      # Release.
+      pull-requests: read
     concurrency:
       # One publisher at a time. The version is only known after checkout, and
       # cancelling an in-flight publish could leave a tag without its Release.

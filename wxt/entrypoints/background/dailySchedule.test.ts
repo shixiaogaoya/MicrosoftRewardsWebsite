@@ -697,7 +697,7 @@ describe('handleDailyCheckAlarm', () => {
     await flushPendingWork();
 
     const settled = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
-    expect(settled?.claim).toEqual({ status: 'unconfirmed', reason: '已点击，未出现完成状态' });
+    expect(settled?.claim).toEqual(expect.objectContaining({ status: 'unconfirmed', reason: '已点击，未出现完成状态' }));
   });
 
   // Regression: stop settled every task kind, and a missing result counted as
@@ -709,7 +709,7 @@ describe('handleDailyCheckAlarm', () => {
     await stopRewards();
 
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
-    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.search).toEqual(expect.objectContaining({ status: 'cancelled', reason: '已停止' }));
     expect(results?.daily).toBeUndefined();
     expect(results?.claim).toBeUndefined();
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
@@ -722,8 +722,8 @@ describe('handleDailyCheckAlarm', () => {
     await stopRewards();
 
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
-    expect(results?.search).toEqual({ status: 'cancelled', reason: '已停止' });
-    expect(results?.daily).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.search).toEqual(expect.objectContaining({ status: 'cancelled', reason: '已停止' }));
+    expect(results?.daily).toEqual(expect.objectContaining({ status: 'cancelled', reason: '已停止' }));
     expect(results?.claim).toBeUndefined();
     const state = await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL);
     expect(state?.daily).toBe(true);
@@ -782,8 +782,8 @@ describe('handleDailyCheckAlarm', () => {
     await pending;
 
     const results = await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL);
-    expect(results?.daily).toEqual({ status: 'cancelled', reason: '已停止' });
-    expect(results?.claim).toEqual({ status: 'cancelled', reason: '已停止' });
+    expect(results?.daily).toEqual(expect.objectContaining({ status: 'cancelled', reason: '已停止' }));
+    expect(results?.claim).toEqual(expect.objectContaining({ status: 'cancelled', reason: '已停止' }));
     expect(await getStorageItem<TaskRunState>(RUN_KEY, StorageValues.LOCAL)).toBeNull();
   });
 

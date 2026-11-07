@@ -1,8 +1,16 @@
 import { defineContentScript } from '#imports';
 import { browser } from 'wxt/browser';
 import { getRndInteger, wait } from '@/entrypoints/utils/helpers';
-import { matchDailyAnchors } from '@/entrypoints/utils/dailyAnchors';
-import { claimPoints, hasSignInLink, type ClaimOutcome } from '@/entrypoints/utils/claimFlow';
+import { claimPoints, type ClaimOutcome } from '@/entrypoints/utils/claimFlow';
+import {
+    claimTaskResult,
+    dailySignedOutResult,
+    dailyWaitExpiredCause,
+    pendingResult,
+    readDailyPage,
+    recognizeSignedOut,
+    type DailyPageReading,
+} from '@/entrypoints/utils/rewardsRecognition';
 import { waitForMatch } from '@/entrypoints/utils/waitForMatch';
 import { oncePerPageRun } from '@/entrypoints/utils/oncePerPageRun';
 import { RUN_KEY, type TaskResult, type TaskRunState } from '@/entrypoints/utils/runState';
@@ -32,8 +40,9 @@ export default defineContentScript({
 
 // Daily sets first: completing them can turn fresh points into claimable ones,
 // so claiming afterwards picks those up in the same visit. Either job may be off.
-// The reply names this round, and says what each job ended as — a click is not
-// reported as a confirmed claim or a confirmed daily card.
+// This script only orchestrates: what the page says is read by the recognition
+// layer (rewardsRecognition), the clicks happen here, and neither a click nor a
+// closed page is reported as a confirmed card or claim.
 async function runDashboard(request: DashboardRequest): Promise<void> {
     const stopped = () => wasCancelled(request.runId);
     const daily = request.doDailySet ? await openDailySets(stopped) : undefined;
@@ -58,40 +67,38 @@ async function wasCancelled(runId: number | undefined): Promise<boolean> {
     return !run || run.id !== runId || run.phase === 'stopping';
 }
 
-const CLAIM_RESULTS: Record<ClaimOutcome, TaskResult> = {
-    claimed: { status: 'completed' },
-    // The flyout opened and its own control said there was nothing to press.
-    nothingToClaim: { status: 'not-needed' },
-    // No card, or a flyout that never opened: the page does not match what we
-    // look for. That is not the same as "nothing to claim".
-    noCard: { status: 'unconfirmed', reason: '未找到领取入口' },
-    noDialog: { status: 'unconfirmed', reason: '领取窗口未打开' },
-    unconfirmed: { status: 'unconfirmed', reason: '已点击，未出现完成状态' },
-    signedOut: { status: 'failed', reason: '未登录' },
-    cancelled: { status: 'cancelled', reason: '已停止' },
-};
-
 function claimResult(outcome: ClaimOutcome): TaskResult {
-    return CLAIM_RESULTS[outcome];
+    return claimTaskResult(outcome);
 }
 
-// Clicks the cards the dashboard rendered. The page has no marker this script
-// can read back to tell a credited card from one that only opened, so a click
-// is reported as unconfirmed rather than as points earned. Finding no cards is
-// also unconfirmed: an empty grid can be a slow render, not a finished day.
+// Clicks the cards the recognition layer could identify. Every card is of an
+// unknown type to it — quiz and other cards that need real answers cannot be
+// told from search cards without page samples — so the click count is never
+// reported as completion, and the popup offers a manual entry to the page for
+// what could not be verified.
 async function openDailySets(stopped: () => Promise<boolean>): Promise<TaskResult> {
-    const anchors = await waitForMatch(() => {
-        const found = matchDailyAnchors(document);
-        return found.length > 0 ? found : null;
+    const reading = await waitForMatch((): DailyPageReading | null => {
+        const found = readDailyPage(document);
+        // `unknown` keeps the wait going: an empty grid can be a slow render,
+        // not a finished day. Signed-out resolves immediately instead.
+        return found.state === 'unknown' ? null : found;
     }, DAILY_ANCHORS_TIMEOUT_MS);
     if (await stopped()) return { status: 'cancelled', reason: '已停止' };
-    if (!anchors) {
-        return hasSignInLink(document)
-            ? { status: 'failed', reason: '未登录' }
-            : { status: 'unconfirmed', reason: '未找到每日活动卡片' };
+    if (!reading) {
+        // The wait expired still unreadable. Signed-out normally resolves during
+        // the wait; this is the belt-and-braces read for a page that rendered it
+        // late. Otherwise distinguish "a grid rendered but nothing in it is a
+        // card we know" from "the dashboard never rendered".
+        if (recognizeSignedOut(document)) return dailySignedOutResult();
+        return pendingResult(dailyWaitExpiredCause(document));
     }
+    if (reading.state === 'signed-out') return dailySignedOutResult();
+    // The probe maps `unknown` to null, so the wait never resolves with it; this
+    // branch only exists for the type. It reports what it is — unreadable — and
+    // never claims the page is signed out without the sign-in signal.
+    if (reading.state !== 'cards') return pendingResult('unknown-structure');
     let clicked = 0;
-    for (const anchor of anchors) {
+    for (const anchor of reading.anchors) {
         if (await stopped()) break;
         anchor.click();
         clicked += 1;
@@ -100,5 +107,5 @@ async function openDailySets(stopped: () => Promise<boolean>): Promise<TaskResul
     if (await stopped()) {
         return { status: 'cancelled', reason: clicked > 0 ? `已停止，已点击 ${clicked} 张卡片` : '已停止' };
     }
-    return { status: 'unconfirmed', reason: `已点击 ${clicked} 张卡片，页面没有完成标记。点击、关闭页面或等待结束都不能当作完成` };
+    return pendingResult('no-completion-marker', `已点击 ${clicked} 张卡片，页面没有完成标记`);
 }

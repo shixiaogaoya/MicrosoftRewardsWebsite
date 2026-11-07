@@ -127,6 +127,17 @@ describe('isClaimable', () => {
 
         expect(isClaimable(button)).toBe(false);
     });
+
+    // Regression (F05): any `data-disabled` value used to read as "not
+    // claimable". `data-disabled="false"` says the opposite — the control is
+    // usable — and skipping it would drop a real claim as "nothing to do".
+    it('accepts a control whose data-disabled is explicitly "false"', () => {
+        const dialog = claimDialog({ isDisabled: true });
+        expect(isClaimable(findClaimButton(dialog)!)).toBe(false);
+        dialog.querySelector('#claim-action [data-disabled]')!.setAttribute('data-disabled', 'false');
+
+        expect(isClaimable(findClaimButton(dialog)!)).toBe(true);
+    });
 });
 
 describe('findCloseButton', () => {

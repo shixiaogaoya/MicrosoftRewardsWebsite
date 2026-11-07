@@ -9,6 +9,10 @@ on:
 jobs:
   extension:
     name: Extension — typecheck + test + build
+    # Pull requests have no build.yml run, so they get the full dual-target
+    # verification here. master pushes are verified once by build.yml, which
+    # runs the same script fixtures, compile, tests, and the real zips.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,6 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: wxt/package-lock.json
       - run: npm ci
       - run: npm run compile
       - run: npm run test
@@ -44,9 +50,18 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      # TODO: remove continue-on-error once the app is analyzer-clean and the
-      # default template test (test/widget_test.dart) is replaced with real tests.
-      # Kept non-blocking so the baseline CI is green; the steps still report status.
+      # TODO: remove continue-on-error once this job has actually passed on CI.
+      # 2026-11: analyzer issues (missing flutter_lints dep, deprecated
+      # ColorScheme.background, unused _webViewController) were fixed and the
+      # counter template test was replaced with SearchBloc behavior tests, but
+      # no Flutter toolchain was available locally to run analyze/test, so the
+      # fixes are unverified. pubspec.lock was NOT regenerated (needs
+      # `flutter pub get`; hand-writing a lock entry without the solver's
+      # resolution and checksums would be worse than the gap) — this
+      # non-`--locked` pub get resolves it online. This job remains
+      # non-blocking; a green overall workflow does NOT mean the mobile app
+      # passes. Check this job's own step status before treating mobile as
+      # verified.
       - run: flutter analyze
         continue-on-error: true
       - run: flutter test
