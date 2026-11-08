@@ -1,5 +1,7 @@
 # Coding Standards
 
+> 历史背景：本篇观察的是迁移前「无打包器、全局脚本」的旧代码。现行扩展在 `wxt/`，是 WXT + React + TypeScript 的 ESM 模块（有 `import`/`export`，由 WXT 打包），测试用 Vitest。下文仅供了解旧约束的来历，不再约束新代码。
+
 Conventions observed in the codebase (descriptive, not prescriptive). Where the repo is
 inconsistent, that is noted.
 

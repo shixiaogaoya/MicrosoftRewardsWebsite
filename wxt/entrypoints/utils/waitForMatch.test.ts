@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { waitForMatch } from './waitForMatch';
+import { PROBE_ATTRIBUTES, waitForMatch } from './waitForMatch';
 
 function freshRoot(): HTMLElement {
     const root = document.createElement('div');
@@ -36,10 +36,74 @@ describe('waitForMatch', () => {
         expect(((await pending) as HTMLElement)?.id).toBe('target');
     });
 
+    // A probe's answer can flip on an attribute edit alone: the flyout's claim
+    // control toggles data-disabled on the same node, and an observer watching
+    // only childList never re-probes that.
+    it('sees a match that appears through an attribute change on an existing node', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<button type="button" data-disabled="true"></button>';
+        const probe = () => (root.querySelector('button')!.getAttribute('data-disabled') === 'false'
+            ? root.querySelector('button')
+            : null);
+        const pending = waitForMatch(probe, 1000, root);
+
+        root.querySelector('button')!.setAttribute('data-disabled', 'false');
+
+        expect(((await pending) as HTMLElement)?.tagName).toBe('BUTTON');
+    });
+
+    // The claim-flow probes also key on [role="dialog"]: a flyout that turns an
+    // existing node into a dialog via a role edit (not a node insertion) must
+    // still re-run the probe, so role stays in the attribute filter.
+    it('sees a match that appears through a role attribute change on an existing node', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<section></section>';
+        const pending = waitForMatch(() => root.querySelector('[role="dialog"]'), 1000, root);
+
+        root.querySelector('section')!.setAttribute('role', 'dialog');
+
+        expect(((await pending) as HTMLElement)?.tagName).toBe('SECTION');
+    });
+
     it('resolves null when the match never appears, instead of hanging', async () => {
         const root = freshRoot();
 
         expect(await waitForMatch(() => root.querySelector('#target'), 20, root)).toBeNull();
+    });
+
+    // Regression (review on f84bd04): the daily-set wait matches `div.grid > a`,
+    // and the SPA can reveal the grid by adding the `grid` class to a node that
+    // already exists — no childList record, and `class` is not in the default
+    // attribute filter. Callers whose probes match on class pass their own
+    // filter, and that edit must re-run the probe instead of letting the wait
+    // time out on a rendered grid.
+    it('sees a match that appears through a class change when the caller observes class', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<div><a id="card" href="https://bing.com/?form=DL1"></a></div>';
+        const pending = waitForMatch(() => root.querySelector('div.grid > a'), 1000, root, [
+            ...PROBE_ATTRIBUTES,
+            'class',
+        ]);
+
+        root.querySelector('div')!.classList.add('grid');
+
+        expect(((await pending) as HTMLElement)?.id).toBe('card');
+    });
+
+    // The other side of the configurable filter: the claim waits keep the
+    // default set, so unrelated SPA class churn must not re-run their probes —
+    // that was the point of filtering attributes at all.
+    it('ignores class churn under the default filter', async () => {
+        const root = freshRoot();
+        const probe = vi.fn(() => root.querySelector('#target'));
+        const pending = waitForMatch(probe, 50, root);
+
+        root.className = 'some spa churn';
+        await new Promise((r) => setTimeout(r, 20));
+        const callsAfterChurn = probe.mock.calls.length;
+
+        expect(await pending).toBeNull();
+        expect(probe.mock.calls.length).toBe(callsAfterChurn);
     });
 
     it('treats an empty result as "not yet" so callers can wait on a collection', async () => {

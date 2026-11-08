@@ -1,18 +1,44 @@
 import { findClaimButton, findCloseButton, isClaimable } from './claimCard';
+import { recognizeSignedOut } from './rewardsRecognition';
 import { waitForMatch } from './waitForMatch';
 
 // The dashboard renders async, so each step waits for what it clicks. Both waits
 // are bounded: "nothing to claim" is an ordinary day, not a failure.
 const CLAIM_CARD_TIMEOUT_MS = 15000;
 const CLAIM_DIALOG_TIMEOUT_MS = 10000;
-// After the confirm click we wait for a state we can see change. A fixed pause
-// is not evidence that the claim landed.
+// A flyout control that is disabled the very instant it appears may just still
+// be loading: reading that snapshot as "nothing pending" made a transient state
+// authoritative — the pre-click twin of the post-click rule further down. Only
+// a control that stays disabled for this whole bounded window is reported as
+// nothing to claim.
+const CLAIM_CLAIMABLE_TIMEOUT_MS = 5000;
+// After the confirm click we wait, bounded, for anything observable to change.
+// The wait is NOT evidence: a control that disables or a flyout that closes can
+// be the request still in flight, so the outcome below stays unconfirmed either
+// way. What the wait buys is not slamming the flyout shut mid-request.
 const CLAIM_CONFIRM_TIMEOUT_MS = 8000;
 
 // Reported rather than logged, so the caller (and the tests) can tell a real
-// claim from the several ways there is simply nothing to do — and from a click
-// that never produced a success state we can observe.
-export type ClaimOutcome = 'claimed' | 'nothingToClaim' | 'noCard' | 'noDialog' | 'unconfirmed' | 'signedOut' | 'cancelled';
+// outcome from the several ways there is simply nothing to do — and from a click
+// that never produced a success state we can observe. There is no 'claimed':
+// no verified completion marker exists for this page (A08), so a click that
+// lands is reported as `clickedUnverified`, never as points earned.
+// `controlRemoved` is the confirm control vanishing mid-wait (flyout closed,
+// SPA re-render): whatever replaced it was never seen, so unlike
+// `nothingToClaim` it is unconfirmed, not a definite nothing-to-do.
+export type ClaimOutcome =
+    | 'nothingToClaim'
+    | 'noCard'
+    | 'noDialog'
+    | 'controlRemoved'
+    | 'clickedUnverified'
+    | 'signedOut'
+    | 'cancelled';
+
+// Sentinel the claimable wait resolves with when the control leaves the DOM
+// mid-wait: a detached node can never become claimable, so waiting on it to
+// time out would read a control we lost as a definitive nothingToClaim.
+const CONTROL_REMOVED = 'control-removed';
 
 // The dashboard's "Ready to claim" card is only a trigger: it opens a flyout
 // whose own card carries the button that actually claims. So this is two clicks,
@@ -25,49 +51,43 @@ export async function claimPoints(
 ): Promise<ClaimOutcome> {
     const card = await waitForMatch(() => findClaimButton(root), CLAIM_CARD_TIMEOUT_MS, root);
     if (await cancelled()) return 'cancelled';
-    if (!card) return hasSignInLink(root) ? 'signedOut' : 'noCard';
+    if (!card) return recognizeSignedOut(root) ? 'signedOut' : 'noCard';
     card.click();
 
     const claimButton = await waitForMatch(() => findClaimButtonInDialog(root), CLAIM_DIALOG_TIMEOUT_MS, root);
     if (await cancelled()) return 'cancelled';
     if (!claimButton) return 'noDialog';
 
-    if (!isClaimable(claimButton)) {
+    // The probe checks for detachment first, the same containment guard
+    // claimEffectObserved and dismissDialog use: the user can close the flyout
+    // or the SPA can re-render it during this wait, and the captured button
+    // would otherwise sit detached forever — its timeout is not evidence that
+    // nothing was pending.
+    const ready = await waitForMatch((): HTMLButtonElement | typeof CONTROL_REMOVED | null => {
+        if (!root.contains(claimButton)) return CONTROL_REMOVED;
+        return isClaimable(claimButton) ? claimButton : null;
+    }, CLAIM_CLAIMABLE_TIMEOUT_MS, root);
+    if (await cancelled()) return 'cancelled';
+    if (ready === CONTROL_REMOVED) return 'controlRemoved';
+    if (!ready) {
         dismissDialog(claimButton, root);
         return 'nothingToClaim';
     }
     claimButton.click();
-    const confirmed = await waitForMatch(
-        () => claimSettled(claimButton, root),
-        CLAIM_CONFIRM_TIMEOUT_MS,
-        root
-    );
-    if (!confirmed) return 'unconfirmed';
-    dismissDialog(claimButton, root);
-    return 'claimed';
+    const observed = await waitForMatch(() => claimEffectObserved(claimButton, root), CLAIM_CONFIRM_TIMEOUT_MS, root);
+    // Close the flyout only once the page visibly acted on the click; with
+    // nothing observed we touch the page no further. Either way the click is
+    // unverified — the observation is not proof the claim landed.
+    if (observed) dismissDialog(claimButton, root);
+    return 'clickedUnverified';
 }
 
-// The only success signals this page currently exposes: the confirm control
-// becomes disabled, or the flyout that held it goes away. A button that stays
-// clickable is not a claim, however long we wait.
-// A signed-out dashboard shows a sign-in link instead of the claim card. The
-// content script only runs on rewards.bing.com, so the address bar never leaves
-// that host; the link is the signal we can actually see.
-export function hasSignInLink(root: ParentNode): boolean {
-    for (const anchor of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
-        if (/login\.live\.com|login\.microsoftonline\.com/i.test(anchor.href)) return true;
-    }
-    return false;
-}
-
-// Only a state change on the control itself counts. The flyout going away is
-// NOT evidence: the user can close it with its own X, and the SPA re-renders the
-// grid for reasons unrelated to a claim, so a detached button means "we cannot
-// see it any more", not "the claim landed". Reporting that as `claimed` would
-// tell the user points arrived when nothing was confirmed.
-function claimSettled(claimButton: HTMLButtonElement, root: ParentNode & Node): true | null {
-    if (!root.contains(claimButton)) return null;
-    return isClaimable(claimButton) ? null : true;
+// Anything observable after the confirm click: the control stops being claimable,
+// or the flyout (and with it the button) leaves the DOM. Observed only to time
+// the dismiss — neither state is proof the claim landed, which is exactly why
+// claimPoints returns `clickedUnverified` whether this fires or not.
+function claimEffectObserved(claimButton: HTMLButtonElement, root: ParentNode & Node): true | null {
+    return !root.contains(claimButton) || !isClaimable(claimButton) ? true : null;
 }
 
 // Scoped to the flyout on purpose: the dashboard card is still in the DOM behind

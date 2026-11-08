@@ -27,9 +27,11 @@ export interface DashboardJobs {
 // pressing "Ready to claim". The dashboard is opened ACTIVE: browsers pause
 // rendering/timers in hidden tabs, so the SPA won't render its daily-set grid or
 // its claim flyout — nor keep the click loop running — unless the tab is
-// visible. We restore the user's previous tab when done. Each daily-set click
-// opens a search in its own tab (auto-closed shortly after it loads); if such a
-// tab grabs focus we snap it back to the dashboard so it stays rendered.
+// visible. When done we send the user back to the tab they were on — unless
+// they switched away themselves, in which case their choice stays. Each
+// daily-set click opens a search in its own tab (auto-closed shortly after it
+// loads); if such a tab grabs focus we snap it back to the dashboard so it
+// stays rendered.
 export async function openDailyRewards(runId: number, jobs: DashboardJobs): Promise<void> {
     const previousActiveTabId = await getActiveTabId();
     if (await isRunStopping(runId)) {
@@ -56,9 +58,21 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
 
     function onCreated(created: { id?: number; openerTabId?: number }): void {
         if (created.openerTabId !== dashboardId || created.id == null) return;
+        const childTabId = created.id;
         // Keep the dashboard foregrounded so it stays rendered and keeps
         // clicking; the search tab still loads in the background and credits.
-        browser.tabs.update(dashboardId, { active: true }).catch(() => {});
+        // A09: the snap-back is for an uninterrupted run only — the check asks
+        // whether the focus is still with this round (the dashboard itself, or
+        // the search tab that just opened and took the foreground). A user who
+        // switched to another tab keeps the page they chose, as the README
+        // states; whether the SPA keeps clicking from a background tab is
+        // unverified, which is why an uninterrupted run stays foregrounded.
+        void (async () => {
+            const activeTabId = await getActiveTabId();
+            if (activeTabId === dashboardId || activeTabId === childTabId) {
+                browser.tabs.update(dashboardId, { active: true }).catch(() => {});
+            }
+        })();
         closeDailyTabAfterLoad(created.id);
     }
     browser.tabs.onCreated.addListener(onCreated);
@@ -80,12 +94,24 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
         // drops the daily and claim records, which is what keeps a new round
         // from starting and taking the same id.
         void (async () => {
+            // Read the focus before the dashboard below closes: once it is gone
+            // the browser activates a neighbouring tab, and "not the dashboard"
+            // would stop meaning "the user moved away". Only a user still on
+            // the dashboard is sent back to the tab they were on when the round
+            // started; one who switched to another tab — or another window —
+            // keeps the page they chose (A09). Two trade-offs are deliberate:
+            // the read is async, so a user who switches in the short window
+            // between it and the close below is snapped back once — there is no
+            // cheap way to tell that switch from any other — and a failed
+            // query returns undefined, which conservatively skips the restore
+            // and leaves the browser's own neighbour activation in place.
+            const stillOnDashboard = await getActiveTabId() === dashboardId;
             await closeOwnedTab(runId, dashboardId);
+            if (previousActiveTabId != null && stillOnDashboard) {
+                browser.tabs.update(previousActiveTabId, { active: true }).catch(() => {});
+            }
             await closeOut(runId, dashboardKinds, reported);
         })();
-        if (previousActiveTabId != null) {
-            browser.tabs.update(previousActiveTabId, { active: true }).catch(() => {});
-        }
     }
 
     // A message only counts when it names this round and comes from this round's

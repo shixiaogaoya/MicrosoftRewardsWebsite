@@ -1,5 +1,5 @@
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
-import 'package:microsoft_automatic_rewards/core/di/SearchCancellationToken.dart';
+import 'package:microsoft_automatic_rewards/core/di/search_cancel_token.dart';
 
 abstract class SearchRepository {
   Future<void> performSearches({

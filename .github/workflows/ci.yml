@@ -9,6 +9,10 @@ on:
 jobs:
   extension:
     name: Extension — typecheck + test + build
+    # Pull requests have no build.yml run, so they get the full dual-target
+    # verification here. master pushes are verified once by build.yml, which
+    # runs the same script fixtures, compile, tests, and the real zips.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -24,6 +28,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: wxt/package-lock.json
       - run: npm ci
       - run: npm run compile
       - run: npm run test
@@ -44,10 +50,10 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      # TODO: remove continue-on-error once the app is analyzer-clean and the
-      # default template test (test/widget_test.dart) is replaced with real tests.
-      # Kept non-blocking so the baseline CI is green; the steps still report status.
+      # 2026-11: this job is now blocking. The previously reported analyze
+      # issues are fixed, flutter_lints + lints are resolved dependencies
+      # (real pub.dev sha256 checksums in pubspec.lock), the cancellation-path
+      # tests pass, and a real CI run has confirmed flutter analyze and
+      # flutter test green — continue-on-error is removed.
       - run: flutter analyze
-        continue-on-error: true
       - run: flutter test
-        continue-on-error: true

@@ -21,7 +21,7 @@ class NotificationService {
 
     // 3) Tell the timezone package to treat that as “local”
     final tz.Location deviceLocation = tz.getLocation(nativeName);
-    print('Device timezone: $nativeName');
+    debugPrint('Device timezone: $nativeName');
     tz.setLocalLocation(deviceLocation);
 
     // 4) Continue initializing your notifications plugin…
@@ -98,9 +98,9 @@ class NotificationService {
   }
   static tz.TZDateTime _nextInstanceOfTime(int hour, int minute) {
     final now = tz.TZDateTime.now(tz.local);
-    print('Current time: ${now}');
+    debugPrint('Current time: $now');
     final scheduled = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
-    print('Scheduled time: ${scheduled}');
+    debugPrint('Scheduled time: $scheduled');
     return scheduled.isBefore(now) ? scheduled.add(const Duration(days: 1)) : scheduled;
   }
 

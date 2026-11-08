@@ -30,18 +30,22 @@ cat > "$work/repo/wxt/package.json" <<'EOF'
 EOF
 
 make_zip() {
-  local version="$1"
-  local zip="$2"
-  "$PYTHON" - "$version" "$zip" <<'PY'
+  local manifest_version="$1"
+  local version="$2"
+  local zip="$3"
+  "$PYTHON" - "$manifest_version" "$version" "$zip" <<'PY'
 import json, sys, zipfile
-version, path = sys.argv[1:]
+manifest_version, version, path = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:
-    archive.writestr("manifest.json", json.dumps({"version": version, "name": "fixture"}))
+    archive.writestr(
+        "manifest.json",
+        json.dumps({"manifest_version": int(manifest_version), "version": version, "name": "fixture"}),
+    )
 PY
 }
 
-make_zip "3.1.3" "$work/repo/artifacts/extension-chrome/rewards-3.1.3-chrome.zip"
-make_zip "3.1.3" "$work/repo/artifacts/extension-firefox/rewards-3.1.3-firefox.zip"
+make_zip 3 "3.1.3" "$work/repo/artifacts/extension-chrome/rewards-3.1.3-chrome.zip"
+make_zip 2 "3.1.3" "$work/repo/artifacts/extension-firefox/rewards-3.1.3-firefox.zip"
 
 # Prefer the host jq; when the host has none (a bare WSL or Git Bash often
 # ships without it, and the local gates run there), fall back to the checked-in
@@ -75,6 +79,16 @@ printf '%s\n' "$*" >> "$log"
 
 mode() { printf '%s' "$(cat "$state/$1" 2>/dev/null || true)"; }
 
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  [[ " ${*} " == *" --state merged "* && " ${*} " == *" --json "* ]] || exit 1
+  if [[ -f "$state/prs.json" ]]; then
+    cat "$state/prs.json"
+  else
+    printf '[]\n'
+  fi
+  exit 0
+fi
+
 if [[ "$1" == "api" ]]; then
   shift
   silent=0
@@ -102,6 +116,15 @@ if [[ "$1" == "api" ]]; then
   elif [[ "$path" == *"/git/tags/annotated-object" ]]; then
     code=200
     body="{\"object\":{\"sha\":\"${BUILD_SHA}\",\"type\":\"commit\"}}"
+  elif [[ "$path" == *"/compare/"*"..."* ]]; then
+    # The commit range behind the change notes. A missing fixture file means
+    # "no commits in range"; entries are never invented here.
+    code=200
+    if [[ -f "$state/compare.json" ]]; then
+      body="$(cat "$state/compare.json")"
+    else
+      body='{"commits":[]}'
+    fi
   elif [[ "$path" == *"/releases/tags/"* ]]; then
     tag="${path##*/}"
     case "$(mode "release-${tag}")" in
@@ -126,10 +149,27 @@ fi
 
 if [[ "$1" == "release" && "$2" == "create" ]]; then
   tag="$3"
-  [[ " ${*} " == *" --verify-tag "* && " ${*} " == *" --target ${BUILD_SHA} "* && " ${*} " == *" --notes-from-tag "* ]] || exit 1
-  [[ " ${*} " == *" artifacts/extension-chrome/"*"-chrome.zip "* && " ${*} " == *" artifacts/extension-firefox/"*"-firefox.zip "* ]] || exit 1
-  # --notes-from-tag cannot work with a remote-only tag after shallow checkout.
-  [[ -f "$state/local-tag" || -f "$state/fetched-tag" ]] || exit 1
+  all="$*"
+  shift 3
+  notes_file=""
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--notes-file" ]]; then
+      notes_file="$2"
+      shift 2
+    else
+      shift
+    fi
+  done
+  [[ " $all " == *" --verify-tag "* && " $all " == *" --target ${BUILD_SHA} "* ]] || exit 1
+  # The Release body must be the generated notes file itself, never
+  # --notes-from-tag or a template nothing consumes.
+  [[ " $all " != *" --notes-from-tag "* ]] || exit 1
+  [[ -n "$notes_file" && -f "$notes_file" ]] || exit 1
+  cp "$notes_file" "${FIXTURE_DIR}/release-body"
+  [[ " $all " == *" artifacts/extension-chrome/"*"-chrome.zip "* && " $all " == *" artifacts/extension-firefox/"*"-firefox.zip "* ]] || exit 1
+  # The Release must also carry the run's SHA-256 manifest for its ZIPs.
+  [[ " $all " == *" artifacts/SHA256SUMS "* ]] || exit 1
+  cp artifacts/SHA256SUMS "${FIXTURE_DIR}/sha256sums"
   printf 'exists\n' > "$state/release-${tag}"
   printf '%s\n' "$tag" > "$state/created"
   exit 0
@@ -143,6 +183,16 @@ cat > "$work/bin/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${FIXTURE_DIR}/git.log"
+if [[ "$1" == "ls-remote" && "$2" == "--tags" && "$3" == "origin" ]]; then
+  # Remote tags for the change-notes range, one ref per line. No file means
+  # the repository has no version tags yet, so no range can be derived.
+  if [[ -f "${FIXTURE_DIR}/state/remote-tags" ]]; then
+    while IFS= read -r ref; do
+      [[ -n "$ref" ]] && printf '%s\t%s\n' '0000000000000000000000000000000000000000' "$ref"
+    done < "${FIXTURE_DIR}/state/remote-tags"
+  fi
+  exit 0
+fi
 if [[ "$1" == "tag" ]]; then
   [[ "$2" == "-a" && "$4" == "$BUILD_SHA" && "$5" == "-F" ]] || exit 2
   # Annotated tags record a tagger; the CI runner has no git identity, so the
@@ -257,6 +307,110 @@ run_case() {
   echo "PASS $name"
 }
 
+# The published SHA256SUMS asset must match the exact ZIPs the case shipped,
+# and the checksum values must reach the step summary and, when a tag message
+# was written, the Release body source.
+expect_checksums() {
+  local case_name="$1"
+  local case_dir="$work/cases/$case_name"
+  # GNU sha256sum marks binary-mode digests with a "*" between the hash and the
+  # file name (MSYS does this for globbed ZIP inputs); normalize both sides to
+  # the text-mode "hash  name" form the script writes.
+  local normalize='s/^([0-9a-f]{64})[[:space:]]+\*?/\1  /'
+  local expected
+  expected="$( { cd "$case_dir/repo/artifacts/extension-chrome" && sha256sum *-chrome.zip
+    cd "$case_dir/repo/artifacts/extension-firefox" && sha256sum *-firefox.zip; } | sed -E "$normalize")"
+  [[ -f "$case_dir/sha256sums" ]] || { echo "FAIL $case_name: no SHA256SUMS uploaded"; exit 1; }
+  [[ "$(sed -E "$normalize" "$case_dir/sha256sums")" == "$expected" ]] || {
+    echo "FAIL $case_name: SHA256SUMS does not match the shipped ZIPs"
+    echo "--- expected ---"; printf '%s\n' "$expected"
+    echo "--- actual ---"; cat "$case_dir/sha256sums"
+    exit 1
+  }
+  local chrome_sha firefox_sha
+  chrome_sha="$(sed -n '1p' "$case_dir/sha256sums" | awk '{print $1}')"
+  firefox_sha="$(sed -n '2p' "$case_dir/sha256sums" | awk '{print $1}')"
+  grep -q "$chrome_sha" "$case_dir/accepted-summary" || { echo "FAIL $case_name: Chrome SHA-256 missing from summary"; exit 1; }
+  grep -q "$firefox_sha" "$case_dir/accepted-summary" || { echo "FAIL $case_name: Firefox SHA-256 missing from summary"; exit 1; }
+  if [[ -f "$case_dir/tag-message" ]]; then
+    grep -q "$chrome_sha" "$case_dir/tag-message" || { echo "FAIL $case_name: Chrome SHA-256 missing from tag message"; exit 1; }
+    grep -q "$firefox_sha" "$case_dir/tag-message" || { echo "FAIL $case_name: Firefox SHA-256 missing from tag message"; exit 1; }
+  fi
+  echo "PASS $case_name-checksums"
+}
+
+# The generated change notes must be the actual Release body: the range
+# starts at the previous stable tag (not the release's own tag), every entry
+# maps back to a fixture commit (PR link when a merged PR matches the
+# commit, author plus commit link otherwise), noise stays out, and the
+# install/verification tail sits after the sections.
+expect_notes() {
+  local case_name="$1"
+  local case_dir="$work/cases/$case_name"
+  local body="$case_dir/release-body"
+  [[ -s "$body" ]] || { echo "FAIL $case_name: no Release body captured"; exit 1; }
+  grep -qF 'compare/v3.1.2...' "$case_dir/gh.log" \
+    || { echo "FAIL $case_name: change range does not start at the previous stable tag"; exit 1; }
+  local improve fix maintain tail_line
+  improve="$(grep -n '^## 升级与改进$' "$body" | cut -d: -f1)"
+  fix="$(grep -n '^## 问题修复$' "$body" | cut -d: -f1)"
+  maintain="$(grep -n '^## 文档与维护$' "$body" | cut -d: -f1)"
+  [[ -n "$improve" && -n "$fix" && -n "$maintain" && "$improve" -lt "$fix" && "$fix" -lt "$maintain" ]] \
+    || { echo "FAIL $case_name: sections missing or out of order"; exit 1; }
+  tail_line="$(grep -n '^由提交 ' "$body" | head -n 1 | cut -d: -f1)"
+  [[ -n "$tail_line" && "$tail_line" -gt "$maintain" ]] \
+    || { echo "FAIL $case_name: install notes must come after the change sections"; exit 1; }
+  local bullets expected forbidden
+  bullets="$(awk -v start="$improve" -v stop="$tail_line" 'NR > start && NR < stop && sub(/^- /, "")' "$body" | sort)"
+  expected="$(printf '%s\n' \
+    '新增诊断信息导出。[@alice](https://github.com/alice) · [1111111](https://example.test/commit/1111)' \
+    '单项重试绕过设置加载与保存状态限制。[@bob](https://github.com/bob) · [#12](https://example.test/pull/12)' \
+    '合并构建与发布工作流。[@dan](https://github.com/dan) · [6666666](https://example.test/commit/6666)' | sort)"
+  [[ "$bullets" == "$expected" ]] || {
+    echo "FAIL $case_name: change entries differ from the fixture commits"
+    echo "--- expected ---"; printf '%s\n' "$expected"
+    echo "--- actual ---"; printf '%s\n' "$bullets"
+    exit 1
+  }
+  for forbidden in '升级版本' 'Merge pull request' '#99' 'carol' 'Carol'; do
+    if grep -qF "$forbidden" "$body"; then
+      echo "FAIL $case_name: noise or unlinked PR leaked into the body: $forbidden"
+      exit 1
+    fi
+  done
+  grep -qF '审核通过后由商店自动上线' "$body" \
+    || { echo "FAIL $case_name: store auto-publish policy missing from the body"; exit 1; }
+  grep -qF 'SHA256SUMS' "$body" \
+    || { echo "FAIL $case_name: verification notes missing from the body"; exit 1; }
+  if [[ -f "$case_dir/tag-message" ]]; then
+    diff -q "$case_dir/tag-message" "$body" >/dev/null \
+      || { echo "FAIL $case_name: tag message differs from the Release body"; exit 1; }
+  fi
+  echo "PASS $case_name-notes"
+}
+
+# A fix-only range: the other two groups stay empty and must be omitted, and
+# a commit whose author has no GitHub login still gets the author name and
+# the commit link, with no invented PR reference.
+expect_notes_fix_only() {
+  local case_name="$1"
+  local case_dir="$work/cases/$case_name"
+  local body="$case_dir/release-body"
+  [[ -s "$body" ]] || { echo "FAIL $case_name: no Release body captured"; exit 1; }
+  grep -q '^## 问题修复$' "$body" || { echo "FAIL $case_name: fix section missing"; exit 1; }
+  if grep -qE '^## (升级与改进|文档与维护)$' "$body"; then
+    echo "FAIL $case_name: empty sections must be omitted"
+    exit 1
+  fi
+  grep -qxF -- '- 修复停止后仍会跳转首个搜索结果。Eve · [9999999](https://example.test/commit/9999)' "$body" \
+    || { echo "FAIL $case_name: direct-commit entry with author and commit link missing"; exit 1; }
+  grep -qxF -- '- 修复商店自动提审重跑与重复版本处理。[@ming](https://github.com/ming) · [1212121](https://example.test/commit/1212)' "$body" \
+    || { echo "FAIL $case_name: separator-less 修复 subject not classified as a fix"; exit 1; }
+  grep -qF '审核通过后由商店自动上线' "$body" \
+    || { echo "FAIL $case_name: store auto-publish policy missing from the body"; exit 1; }
+  echo "PASS $case_name-notes"
+}
+
 set_state() {
   local case_name="$1"
   local key="$2"
@@ -265,13 +419,121 @@ set_state() {
   printf '%s\n' "$value" > "$work/saved/$case_name/$key"
 }
 
+# Remote version tags for the change-notes range, one ref per line. The
+# current tag v3.1.3 is included where the script must prefer v3.1.2.
+set_remote_tags() {
+  local case_name="$1"
+  shift
+  mkdir -p "$work/saved/$case_name"
+  printf '%s\n' "$@" > "$work/saved/$case_name/remote-tags"
+}
+
+put_fixture() {
+  local case_name="$1"
+  local name="$2"
+  local file="$3"
+  mkdir -p "$work/saved/$case_name"
+  cp "$file" "$work/saved/$case_name/$name"
+}
+
 prepare_absent() {
   set_state "$1" "tag-v3.1.3" "absent"
   set_state "$1" "release-v3.1.3" "absent"
 }
 
+# Change-notes fixtures. compare-mixed covers a PR-linked fix, a direct feat
+# commit without any PR, a version-bump chore, a duplicate subject and a
+# merge commit (all three must be dropped), plus a ci commit for the third
+# group. PR #99 maps to a commit outside the range and must never appear.
+fixtures="$work/fixtures"
+mkdir -p "$fixtures"
+cat > "$fixtures/compare-mixed.json" <<'EOF'
+{
+  "commits": [
+    {"sha": "1111111111111111111111111111111111111111", "html_url": "https://example.test/commit/1111",
+     "commit": {"message": "feat: 新增诊断信息导出\n\n导出内容不含敏感字段。", "author": {"name": "Alice Chen"}},
+     "author": {"login": "alice"}},
+    {"sha": "2222222222222222222222222222222222222222", "html_url": "https://example.test/commit/2222",
+     "commit": {"message": "修复：单项重试绕过设置加载与保存状态限制", "author": {"name": "Bob Li"}},
+     "author": {"login": "bob"}},
+    {"sha": "3333333333333333333333333333333333333333", "html_url": "https://example.test/commit/3333",
+     "commit": {"message": "chore: 升级版本至 3.1.3", "author": {"name": "Bob Li"}},
+     "author": {"login": "bob"}},
+    {"sha": "4444444444444444444444444444444444444444", "html_url": "https://example.test/commit/4444",
+     "commit": {"message": "feat: 新增诊断信息导出", "author": {"name": "Carol Wu"}},
+     "author": {"login": "carol"}},
+    {"sha": "5555555555555555555555555555555555555555", "html_url": "https://example.test/commit/5555",
+     "commit": {"message": "Merge pull request #7 from carol/feature", "author": {"name": "Carol Wu"}},
+     "author": {"login": "carol"}},
+    {"sha": "6666666666666666666666666666666666666666", "html_url": "https://example.test/commit/6666",
+     "commit": {"message": "ci: 合并构建与发布工作流", "author": {"name": "Dan Zhou"}},
+     "author": {"login": "dan"}}
+  ]
+}
+EOF
+cat > "$fixtures/prs-mixed.json" <<'EOF'
+[
+  {"number": 12, "url": "https://example.test/pull/12",
+   "author": {"login": "bob", "name": "Bob Li"},
+   "mergeCommit": {"oid": "2222222222222222222222222222222222222222"}},
+  {"number": 99, "url": "https://example.test/pull/99",
+   "author": {"login": "zoe"},
+   "mergeCommit": {"oid": "abcdefabcdefabcdefabcdefabcdefabcdefabcd"}}
+]
+EOF
+# A fix-only range: one conventional fix whose author has no GitHub login,
+# and one real-history subject that leads with 修复 without any separator —
+# both belong in 问题修复. The other two groups stay empty and must be
+# omitted.
+cat > "$fixtures/compare-fix-only.json" <<'EOF'
+{
+  "commits": [
+    {"sha": "9999999999999999999999999999999999999999", "html_url": "https://example.test/commit/9999",
+     "commit": {"message": "fix: 修复停止后仍会跳转首个搜索结果", "author": {"name": "Eve"}},
+     "author": null},
+    {"sha": "1212121212121212121212121212121212121212", "html_url": "https://example.test/commit/1212",
+     "commit": {"message": "修复商店自动提审重跑与重复版本处理", "author": {"name": "Ming"}},
+     "author": {"login": "ming"}}
+  ]
+}
+EOF
+
 prepare_absent new-version
 run_case new-version create v3.1.3
+expect_checksums new-version
+# Without a previous version tag there is no honest range: the body keeps
+# the install notes but must not invent change sections.
+[[ -s "$work/cases/new-version/release-body" ]] || { echo "FAIL new-version: no Release body captured"; exit 1; }
+if grep -q '^## ' "$work/cases/new-version/release-body"; then
+  echo "FAIL new-version: change sections without a previous version tag"
+  exit 1
+fi
+
+# The full notes pipeline: PR-linked and direct commits, noise dropping, and
+# the generated notes as the Release body of a newly created tag.
+prepare_absent notes-with-prs
+set_remote_tags notes-with-prs "refs/tags/v3.1.2" "refs/tags/v3.1.3"
+put_fixture notes-with-prs compare.json "$fixtures/compare-mixed.json"
+put_fixture notes-with-prs prs.json "$fixtures/prs-mixed.json"
+run_case notes-with-prs create v3.1.3
+expect_checksums notes-with-prs
+expect_notes notes-with-prs
+
+# Reusing a tag that already points at this build must still publish the
+# generated notes as the Release body, not the tag's own message.
+prepare_absent notes-reuse
+set_state notes-reuse tag-v3.1.3 same
+set_remote_tags notes-reuse "refs/tags/v3.1.2" "refs/tags/v3.1.3"
+put_fixture notes-reuse compare.json "$fixtures/compare-mixed.json"
+put_fixture notes-reuse prs.json "$fixtures/prs-mixed.json"
+run_case notes-reuse reuse v3.1.3
+expect_notes notes-reuse
+
+prepare_absent notes-fix-only
+set_remote_tags notes-fix-only "refs/tags/v3.1.2"
+put_fixture notes-fix-only compare.json "$fixtures/compare-fix-only.json"
+run_case notes-fix-only create v3.1.3
+expect_notes_fix_only notes-fix-only
 
 prepare_absent existing-release
 set_state existing-release release-v3.1.3 exists
@@ -303,6 +565,7 @@ run_case existing-release-older-tag skip ''
 prepare_absent same-tag
 set_state same-tag tag-v3.1.3 same
 run_case same-tag reuse v3.1.3
+expect_checksums same-tag
 
 prepare_absent other-tag
 set_state other-tag tag-v3.1.3 other
@@ -343,6 +606,24 @@ set_state prerelease-existing-tag release-v3.1.3-beta.2 absent
 run_case prerelease-existing-tag reuse '' \
   env GITHUB_REF="refs/tags/v3.1.3-beta.2" GITHUB_REF_NAME="v3.1.3-beta.2"
 
+# A prerelease backfilled after a newer stable tag exists must derive its range
+# from the stable tag below its base version, not the repository-wide maximum:
+# publishing v3.1.3-beta.2 after v3.1.5 compares from v3.1.2, never v3.1.5.
+prepare_absent backfilled-prerelease
+set_state backfilled-prerelease tag-v3.1.3-beta.2 same
+set_state backfilled-prerelease release-v3.1.3-beta.2 absent
+set_remote_tags backfilled-prerelease "refs/tags/v3.1.2" "refs/tags/v3.1.3" "refs/tags/v3.1.5"
+put_fixture backfilled-prerelease compare.json "$fixtures/compare-fix-only.json"
+run_case backfilled-prerelease reuse '' \
+  env GITHUB_REF="refs/tags/v3.1.3-beta.2" GITHUB_REF_NAME="v3.1.3-beta.2"
+grep -qF 'compare/v3.1.2...' "$work/cases/backfilled-prerelease/gh.log" \
+  || { echo "FAIL backfilled-prerelease: range must start below the prerelease base version"; exit 1; }
+if grep -qF 'compare/v3.1.5...' "$work/cases/backfilled-prerelease/gh.log"; then
+  echo "FAIL backfilled-prerelease: repo-maximum stable tag used as range start"
+  exit 1
+fi
+expect_notes_fix_only backfilled-prerelease
+
 prepare_absent prerelease
 set_state prerelease tag-v3.1.3-beta.2 absent
 set_state prerelease release-v3.1.3-beta.2 absent
@@ -367,14 +648,70 @@ prepare_absent raced-publish
 set_state raced-publish push-v3.1.3 race
 run_case raced-publish skip v3.1.3
 
-# A wrong manifest version must fail before any tag or release is considered.
+# A wrong manifest version must fail before any tag or release is considered,
+# for both packages.
 prepare_absent bad-manifest
 run_case bad-manifest fail '' \
-  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"manifest_version":3,"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
 import json, sys, zipfile
 path, payload = sys.argv[1:]
 with zipfile.ZipFile(path, "w") as archive:
     archive.writestr("manifest.json", payload)
+PY'
+
+prepare_absent bad-manifest-firefox
+run_case bad-manifest-firefox fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-firefox/rewards-3.1.3-firefox.zip '"'"'{"manifest_version":2,"version":"9.9.9","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+import json, sys, zipfile
+path, payload = sys.argv[1:]
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("manifest.json", payload)
+PY'
+
+# Each target must keep its own manifest_version: Chrome MV3, Firefox MV2.
+prepare_absent wrong-manifest-version-chrome
+run_case wrong-manifest-version-chrome fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"manifest_version":2,"version":"3.1.3","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+import json, sys, zipfile
+path, payload = sys.argv[1:]
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("manifest.json", payload)
+PY'
+
+prepare_absent wrong-manifest-version-firefox
+run_case wrong-manifest-version-firefox fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-firefox/rewards-3.1.3-firefox.zip '"'"'{"manifest_version":3,"version":"3.1.3","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+import json, sys, zipfile
+path, payload = sys.argv[1:]
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("manifest.json", payload)
+PY'
+
+# A string-typed manifest_version ("3") must not pass as MV3.
+prepare_absent string-manifest-version-chrome
+run_case string-manifest-version-chrome fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip '"'"'{"manifest_version":"3","version":"3.1.3","name":"fixture"}'"'"' <<'"'"'PY'"'"'
+import json, sys, zipfile
+path, payload = sys.argv[1:]
+with zipfile.ZipFile(path, "w") as archive:
+    archive.writestr("manifest.json", payload)
+PY'
+
+# A ZIP without a root manifest.json fails for either package.
+prepare_absent missing-manifest-chrome
+run_case missing-manifest-chrome fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-chrome/rewards-3.1.3-chrome.zip <<'"'"'PY'"'"'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("not-manifest.txt", "fixture")
+PY'
+
+prepare_absent missing-manifest-firefox
+run_case missing-manifest-firefox fail '' \
+  bash -c '"$PYTHON" - artifacts/extension-firefox/rewards-3.1.3-firefox.zip <<'"'"'PY'"'"'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("not-manifest.txt", "fixture")
 PY'
 
 echo "ALL LOCAL SCENARIOS PASSED"
@@ -382,3 +719,5 @@ echo "--- new version summary ---"
 cat "$work/cases/new-version/accepted-summary"
 echo "--- tag message ---"
 cat "$work/cases/new-version/tag-message"
+echo "--- release body with change sections ---"
+cat "$work/cases/notes-with-prs/release-body"

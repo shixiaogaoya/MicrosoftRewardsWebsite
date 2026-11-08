@@ -1,6 +1,6 @@
 # Feature Status
 
-> 历史背景：下表描述的是迁移前的 Chrome、Firefox 分目录和移动应用。现行扩展的中文界面、无推广布局、折叠高级设置、停止本轮、每日自动总开关和设置校验，见仓库根目录 [README.md](../../README.md)。
+> 历史背景：下表描述的是迁移前的 Chrome、Firefox 分目录和移动应用（含 2.2.x 版本与分目录构建记录）。现行扩展的中文界面、无推广布局、折叠高级设置、停止本轮、每日自动总开关和设置校验，见仓库根目录 [README.md](../../README.md)；**当前的功能与验证状态（含自动化测试实际情况）以 [docs/feature-status.md](../feature-status.md) 为准**，本表不再更新。
 
 Legend: ✅ implemented · 🟡 partial / unclear · ⛔ absent · 🔎 Needs Verification
 
@@ -18,7 +18,7 @@ Legend: ✅ implemented · 🟡 partial / unclear · ⛔ absent · 🔎 Needs Ve
 | Referral link handling | 🟡 | `setupRewardsLink` implemented but **commented out** in popup. |
 | TypeScript source ↔ shipped parity | ✅ | Rebuilt 2026-07-15; `src/` now generates `prod/dist/`. |
 | Chrome/Firefox version alignment | ✅ | Both source manifests now 2.2.7 (aligned 2026-07-15). ⚠️ store uploads must keep versions monotonic. |
-| Automated tests | ⛔ | None. |
+| Automated tests | ⛔ | None.（迁移前记录；现行 `wxt/` 已有 Vitest 套件并在 CI 执行，见 [docs/feature-status.md](../feature-status.md)） |
 
 ## Mobile app (Flutter)
 
@@ -34,7 +34,7 @@ Legend: ✅ implemented · 🟡 partial / unclear · ⛔ absent · 🔎 Needs Ve
 | Keep-awake during run | ✅ | `wakelock_plus` dependency present; usage 🔎. |
 | Daily-set automation (like the extensions) | 🔎 | Not confirmed in mobile; may be search-only. |
 | Play Store distribution | 🔎 | Popup links a Play Store id; live status unconfirmed. |
-| Automated tests | ⛔ | Only the default `widget_test.dart`. |
+| Automated tests | ⛔ | Only the default `widget_test.dart`.（迁移前记录；现移动端有 `test/search_bloc_test.dart`，但 `flutter analyze`/`flutter test` 在 CI 带 `continue-on-error` 且近期失败，见 [docs/feature-status.md](../feature-status.md)） |
 
 ## Cross-cutting
 
