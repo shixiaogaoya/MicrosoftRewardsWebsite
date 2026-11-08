@@ -23,7 +23,22 @@ const CLAIM_CONFIRM_TIMEOUT_MS = 8000;
 // that never produced a success state we can observe. There is no 'claimed':
 // no verified completion marker exists for this page (A08), so a click that
 // lands is reported as `clickedUnverified`, never as points earned.
-export type ClaimOutcome = 'nothingToClaim' | 'noCard' | 'noDialog' | 'clickedUnverified' | 'signedOut' | 'cancelled';
+// `controlRemoved` is the confirm control vanishing mid-wait (flyout closed,
+// SPA re-render): whatever replaced it was never seen, so unlike
+// `nothingToClaim` it is unconfirmed, not a definite nothing-to-do.
+export type ClaimOutcome =
+    | 'nothingToClaim'
+    | 'noCard'
+    | 'noDialog'
+    | 'controlRemoved'
+    | 'clickedUnverified'
+    | 'signedOut'
+    | 'cancelled';
+
+// Sentinel the claimable wait resolves with when the control leaves the DOM
+// mid-wait: a detached node can never become claimable, so waiting on it to
+// time out would read a control we lost as a definitive nothingToClaim.
+const CONTROL_REMOVED = 'control-removed';
 
 // The dashboard's "Ready to claim" card is only a trigger: it opens a flyout
 // whose own card carries the button that actually claims. So this is two clicks,
@@ -43,8 +58,17 @@ export async function claimPoints(
     if (await cancelled()) return 'cancelled';
     if (!claimButton) return 'noDialog';
 
-    const ready = await waitForMatch(() => (isClaimable(claimButton) ? claimButton : null), CLAIM_CLAIMABLE_TIMEOUT_MS, root);
+    // The probe checks for detachment first, the same containment guard
+    // claimEffectObserved and dismissDialog use: the user can close the flyout
+    // or the SPA can re-render it during this wait, and the captured button
+    // would otherwise sit detached forever — its timeout is not evidence that
+    // nothing was pending.
+    const ready = await waitForMatch((): HTMLButtonElement | typeof CONTROL_REMOVED | null => {
+        if (!root.contains(claimButton)) return CONTROL_REMOVED;
+        return isClaimable(claimButton) ? claimButton : null;
+    }, CLAIM_CLAIMABLE_TIMEOUT_MS, root);
     if (await cancelled()) return 'cancelled';
+    if (ready === CONTROL_REMOVED) return 'controlRemoved';
     if (!ready) {
         dismissDialog(claimButton, root);
         return 'nothingToClaim';

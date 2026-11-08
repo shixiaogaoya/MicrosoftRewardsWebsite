@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { waitForMatch } from './waitForMatch';
+import { PROBE_ATTRIBUTES, waitForMatch } from './waitForMatch';
 
 function freshRoot(): HTMLElement {
     const root = document.createElement('div');
@@ -69,6 +69,41 @@ describe('waitForMatch', () => {
         const root = freshRoot();
 
         expect(await waitForMatch(() => root.querySelector('#target'), 20, root)).toBeNull();
+    });
+
+    // Regression (review on f84bd04): the daily-set wait matches `div.grid > a`,
+    // and the SPA can reveal the grid by adding the `grid` class to a node that
+    // already exists — no childList record, and `class` is not in the default
+    // attribute filter. Callers whose probes match on class pass their own
+    // filter, and that edit must re-run the probe instead of letting the wait
+    // time out on a rendered grid.
+    it('sees a match that appears through a class change when the caller observes class', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<div><a id="card" href="https://bing.com/?form=DL1"></a></div>';
+        const pending = waitForMatch(() => root.querySelector('div.grid > a'), 1000, root, [
+            ...PROBE_ATTRIBUTES,
+            'class',
+        ]);
+
+        root.querySelector('div')!.classList.add('grid');
+
+        expect(((await pending) as HTMLElement)?.id).toBe('card');
+    });
+
+    // The other side of the configurable filter: the claim waits keep the
+    // default set, so unrelated SPA class churn must not re-run their probes —
+    // that was the point of filtering attributes at all.
+    it('ignores class churn under the default filter', async () => {
+        const root = freshRoot();
+        const probe = vi.fn(() => root.querySelector('#target'));
+        const pending = waitForMatch(probe, 50, root);
+
+        root.className = 'some spa churn';
+        await new Promise((r) => setTimeout(r, 20));
+        const callsAfterChurn = probe.mock.calls.length;
+
+        expect(await pending).toBeNull();
+        expect(probe.mock.calls.length).toBe(callsAfterChurn);
     });
 
     it('treats an empty result as "not yet" so callers can wait on a collection', async () => {

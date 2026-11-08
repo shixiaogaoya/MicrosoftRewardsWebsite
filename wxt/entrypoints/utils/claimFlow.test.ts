@@ -115,6 +115,24 @@ describe('claimPoints', () => {
         expect(clicked).toEqual(['card', 'claim']);
     });
 
+    // Regression (review on f84bd04): a disabled control removed mid-wait (user
+    // closes the flyout, the SPA re-renders it) used to keep probing the
+    // detached node until the timeout, landing as a definite nothingToClaim.
+    // Whatever replaced the control was never seen, so the outcome must stay
+    // unconfirmed — never "not needed".
+    it('reports an unconfirmed outcome, not nothingToClaim, when the control is removed mid-wait', async () => {
+        const root = dashboard({ dialog: () => dialogHtml({ disabled: 'true' }) });
+        const clicked = recordClicks(root);
+
+        const pending = claimPoints(root);
+        await vi.advanceTimersByTimeAsync(1000);
+        root.querySelector('[role="dialog"]')!.remove();
+        const outcome = await runToCompletion(pending);
+
+        expect(outcome).toBe('controlRemoved');
+        expect(clicked).toEqual(['card']);
+    });
+
     // Regression (F05): a `data-disabled` attribute of any value used to read as
     // "nothing pending". With the value explicitly "false" the control is
     // usable, so the claim is pressed — not skipped as a false "not needed".

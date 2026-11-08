@@ -11,7 +11,7 @@ import {
     recognizeSignedOut,
     type DailyPageReading,
 } from '@/entrypoints/utils/rewardsRecognition';
-import { waitForMatch } from '@/entrypoints/utils/waitForMatch';
+import { PROBE_ATTRIBUTES, waitForMatch } from '@/entrypoints/utils/waitForMatch';
 import { oncePerPageRun } from '@/entrypoints/utils/oncePerPageRun';
 import { RUN_KEY, type TaskResult, type TaskRunState } from '@/entrypoints/utils/runState';
 import { storage } from '#imports';
@@ -77,12 +77,16 @@ function claimResult(outcome: ClaimOutcome): TaskResult {
 // reported as completion, and the popup offers a manual entry to the page for
 // what could not be verified.
 async function openDailySets(stopped: () => Promise<boolean>): Promise<TaskResult> {
+    // The filter adds `class` to the default set: the grid is matched as
+    // `div.grid`, and the SPA can reveal it by adding that class to an existing
+    // node — a change no childList record and no default-filtered attribute
+    // covers, so without it the wait below could time out on a live grid.
     const reading = await waitForMatch((): DailyPageReading | null => {
         const found = readDailyPage(document);
         // `unknown` keeps the wait going: an empty grid can be a slow render,
         // not a finished day. Signed-out resolves immediately instead.
         return found.state === 'unknown' ? null : found;
-    }, DAILY_ANCHORS_TIMEOUT_MS);
+    }, DAILY_ANCHORS_TIMEOUT_MS, document.body, [...PROBE_ATTRIBUTES, 'class']);
     if (await stopped()) return { status: 'cancelled', reason: '已停止' };
     if (!reading) {
         // The wait expired still unreadable. Signed-out normally resolves during

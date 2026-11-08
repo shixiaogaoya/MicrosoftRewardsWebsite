@@ -159,6 +159,17 @@ describe('claimTaskResult', () => {
         expect(claimTaskResult('noDialog').status).toBe('unconfirmed');
     });
 
+    // 控件在可领取等待期间被移除或替换（review on f84bd04）：接替它的控件
+    // 从未被观察到，不能落成确定性的无需领取。
+    it('maps a control removed mid-wait to unconfirmed, never not-needed', () => {
+        const result = claimTaskResult('controlRemoved');
+        expect(result.status).toBe('unconfirmed');
+        expect(result.status).not.toBe('not-needed');
+        expect(result.cause).toBe('control-missing');
+        expect(result.reason).toContain('移除或替换');
+        expect(result.reason).toContain(`识别器 v${RECOGNIZER_VERSION}`);
+    });
+
     it('maps signed out to failed and cancelled to cancelled', () => {
         expect(claimTaskResult('signedOut')).toEqual({ status: 'failed', reason: '未登录' });
         expect(claimTaskResult('cancelled')).toEqual({ status: 'cancelled', reason: '已停止' });

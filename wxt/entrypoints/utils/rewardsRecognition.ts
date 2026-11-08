@@ -94,6 +94,9 @@ const CLAIM_RESULTS: Record<ClaimOutcome, TaskResult> = {
     nothingToClaim: pendingResult('nothing-pending', '领取窗口显示没有待领取的积分', 'not-needed'),
     noCard: pendingResult('control-missing', '未找到领取入口'),
     noDialog: pendingResult('timeout', '领取窗口未打开'),
+    // 控件在可领取等待期间被移除或替换：接替它的控件从未被观察到，
+    // 不能当成“无需领取”，保持待确认。
+    controlRemoved: pendingResult('control-missing', '领取控件在等待期间被移除或替换'),
     clickedUnverified: pendingResult('no-completion-marker', '已点击领取，未出现可验证的完成状态'),
     signedOut: { status: 'failed', reason: '未登录' },
     cancelled: { status: 'cancelled', reason: '已停止' },

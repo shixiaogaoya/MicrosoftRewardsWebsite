@@ -3,10 +3,20 @@
 // but every wait must be able to give up: "no daily set today" and "nothing to
 // claim" are ordinary outcomes, not errors, and an observer that is never
 // disconnected keeps firing for the life of the page.
+
+// The attributes the claim-flow probes read: data-disabled and the disabled
+// property via isClaimable, img[src] for the claim icon, [role="dialog"] for
+// the flyout, a[href] for the daily-grid and sign-out checks. Wait probes that
+// also match on class — the daily grid is `div.grid`, and an SPA can reveal it
+// by adding that class to an existing node — pass their own superset with
+// `class` included.
+export const PROBE_ATTRIBUTES = ['data-disabled', 'disabled', 'src', 'href', 'role'];
+
 export function waitForMatch<T>(
     probe: () => T | null,
     timeoutMs: number,
     observeRoot: Node | null = document.body,
+    attributeFilter: string[] = PROBE_ATTRIBUTES,
 ): Promise<T | null> {
     return new Promise((resolve) => {
         // Probe once before observing: the match is often already rendered, and
@@ -37,19 +47,20 @@ export function waitForMatch<T>(
         const giveUpTimer = setTimeout(() => settle(null), timeoutMs);
         // `attributes` included: a probe's answer can flip on an attribute edit —
         // the flyout's claim control toggles a data-disabled attribute on the
-        // same node — not only on nodes being added or removed. The filter is
-        // the full set of attributes the probes read (data-disabled and the
-        // disabled property via isClaimable, img[src] for the claim icon,
-        // [role="dialog"] for the flyout, a[href] for the daily grid), so any
-        // attribute the probes could react to is still observed while SPA
-        // class/style churn does not re-run the probe. `aria-disabled` is
-        // deliberately absent — no probe reads it today. Extend this list
-        // alongside any probe that starts reading it.
+        // same node — not only on nodes being added or removed. The default
+        // filter (PROBE_ATTRIBUTES above) is the full set the claim-flow probes
+        // read, so any attribute those probes could react to is still observed
+        // while SPA class/style churn does not re-run them. Probes that match on
+        // class pass their own filter, because a `div.grid` revealed by a class
+        // edit on an existing node produces no childList record the observer
+        // would otherwise react to. `aria-disabled` is deliberately absent — no
+        // probe reads it today. Extend the relevant set alongside any probe
+        // that starts reading it.
         observer.observe(observeRoot, {
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ['data-disabled', 'disabled', 'src', 'href', 'role'],
+            attributeFilter,
         });
     });
 }

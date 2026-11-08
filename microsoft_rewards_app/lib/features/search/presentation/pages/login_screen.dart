@@ -110,8 +110,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       await prefs.setBool("loggedIn", true);
                       // Guard the context across the async gap above: the
                       // widget may be gone by the time the prefs write lands.
+                      // `this.context` (the State's own context) pairs with
+                      // that `mounted` check — the build method's context
+                      // parameter is an unrelated reference to the analyzer.
                       if (!mounted) return;
-                      navigateToSearchScreen(context);
+                      navigateToSearchScreen(this.context);
                     }
                   },
                 ),
