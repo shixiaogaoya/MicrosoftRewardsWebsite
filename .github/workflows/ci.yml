@@ -51,17 +51,17 @@ jobs:
           channel: stable
       - run: flutter pub get
       # TODO: remove continue-on-error once this job has actually passed on CI.
-      # 2026-11: analyzer issues (missing flutter_lints dep, deprecated
-      # ColorScheme.background, unused _webViewController) were fixed and the
-      # counter template test was replaced with SearchBloc behavior tests, but
-      # no Flutter toolchain was available locally to run analyze/test, so the
-      # fixes are unverified. pubspec.lock was NOT regenerated (needs
-      # `flutter pub get`; hand-writing a lock entry without the solver's
-      # resolution and checksums would be worse than the gap) — this
-      # non-`--locked` pub get resolves it online. This job remains
-      # non-blocking; a green overall workflow does NOT mean the mobile app
-      # passes. Check this job's own step status before treating mobile as
-      # verified.
+      # 2026-11: the last CI analyze run reported 9 issues (search_bloc
+      # cancellation catch, SearchCancellationToken file name, a missing
+      # `mounted` guard, timezone not a direct dependency, avoid_print /
+      # string-interp lints in notification_service). All are addressed on
+      # this branch, and flutter_lints + lints now carry hand-written
+      # pubspec.lock entries with real pub.dev sha256 checksums (no local
+      # Flutter toolchain existed to run the solver). Still no local
+      # toolchain: analyze/test remain unverified until a real CI run
+      # confirms, so this job stays non-blocking; a green overall workflow
+      # does NOT mean the mobile app passes. Check this job's own step status
+      # before treating mobile as verified.
       - run: flutter analyze
         continue-on-error: true
       - run: flutter test

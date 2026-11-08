@@ -37,7 +37,19 @@ export function waitForMatch<T>(
         const giveUpTimer = setTimeout(() => settle(null), timeoutMs);
         // `attributes` included: a probe's answer can flip on an attribute edit —
         // the flyout's claim control toggles a data-disabled attribute on the
-        // same node — not only on nodes being added or removed.
-        observer.observe(observeRoot, { childList: true, subtree: true, attributes: true });
+        // same node — not only on nodes being added or removed. The filter is
+        // the full set of attributes the probes read (data-disabled and the
+        // disabled property via isClaimable, img[src] for the claim icon,
+        // [role="dialog"] for the flyout, a[href] for the daily grid), so any
+        // attribute the probes could react to is still observed while SPA
+        // class/style churn does not re-run the probe. `aria-disabled` is
+        // deliberately absent — no probe reads it today. Extend this list
+        // alongside any probe that starts reading it.
+        observer.observe(observeRoot, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-disabled', 'disabled', 'src', 'href', 'role'],
+        });
     });
 }

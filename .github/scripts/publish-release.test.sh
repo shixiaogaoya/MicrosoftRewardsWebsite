@@ -606,6 +606,24 @@ set_state prerelease-existing-tag release-v3.1.3-beta.2 absent
 run_case prerelease-existing-tag reuse '' \
   env GITHUB_REF="refs/tags/v3.1.3-beta.2" GITHUB_REF_NAME="v3.1.3-beta.2"
 
+# A prerelease backfilled after a newer stable tag exists must derive its range
+# from the stable tag below its base version, not the repository-wide maximum:
+# publishing v3.1.3-beta.2 after v3.1.5 compares from v3.1.2, never v3.1.5.
+prepare_absent backfilled-prerelease
+set_state backfilled-prerelease tag-v3.1.3-beta.2 same
+set_state backfilled-prerelease release-v3.1.3-beta.2 absent
+set_remote_tags backfilled-prerelease "refs/tags/v3.1.2" "refs/tags/v3.1.3" "refs/tags/v3.1.5"
+put_fixture backfilled-prerelease compare.json "$fixtures/compare-fix-only.json"
+run_case backfilled-prerelease reuse '' \
+  env GITHUB_REF="refs/tags/v3.1.3-beta.2" GITHUB_REF_NAME="v3.1.3-beta.2"
+grep -qF 'compare/v3.1.2...' "$work/cases/backfilled-prerelease/gh.log" \
+  || { echo "FAIL backfilled-prerelease: range must start below the prerelease base version"; exit 1; }
+if grep -qF 'compare/v3.1.5...' "$work/cases/backfilled-prerelease/gh.log"; then
+  echo "FAIL backfilled-prerelease: repo-maximum stable tag used as range start"
+  exit 1
+fi
+expect_notes_fix_only backfilled-prerelease
+
 prepare_absent prerelease
 set_state prerelease tag-v3.1.3-beta.2 absent
 set_state prerelease release-v3.1.3-beta.2 absent

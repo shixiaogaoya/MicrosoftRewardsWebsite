@@ -136,19 +136,29 @@ describe('openDailyRewards 结束与子页面的焦点处理', () => {
         expect((await getStorageItem<TaskResults>(RESULTS_KEY, StorageValues.LOCAL))?.daily?.status).toBe('completed');
     });
 
-    // A09 review of the child-tab focus handling: opening a daily-set search
-    // tab snaps focus back to the dashboard so it stays rendered and keeps
-    // clicking. Whether that SPA still works from a background tab is
-    // unverified, so the snap-back is kept — a user who switched away is still
-    // snapped back here; the end-of-round check above is what leaves them
-    // alone once the visit finishes.
-    it('每日活动创建子页面时，仍把活动页拉回前台', async () => {
+    // A09 review of the child-tab focus handling: the snap-back keeps an
+    // uninterrupted run foregrounded (the SPA must stay rendered to keep
+    // clicking), but it no longer fires for a user who already switched away —
+    // the focus check accepts only the dashboard itself or the search tab that
+    // just took the foreground.
+    it('子页面刚抢走前台时，把活动页拉回前台', async () => {
+        const round = await startDashboardRound();
+        // The newly opened search tab is now the active one.
+        round.setActive(99);
+
+        round.created.forEach((listener) => listener({ id: 99, openerTabId: DASHBOARD_ID }));
+        await flush();
+
+        expect(round.updates).toContainEqual({ tabId: DASHBOARD_ID, active: true });
+    });
+
+    it('用户已切到别的标签页时，子页面不再把活动页拉回前台', async () => {
         const round = await startDashboardRound();
         round.setActive(9);
 
         round.created.forEach((listener) => listener({ id: 99, openerTabId: DASHBOARD_ID }));
         await flush();
 
-        expect(round.updates).toContainEqual({ tabId: DASHBOARD_ID, active: true });
+        expect(round.updates).toEqual([]);
     });
 });

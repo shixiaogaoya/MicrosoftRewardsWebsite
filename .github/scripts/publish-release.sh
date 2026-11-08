@@ -220,16 +220,23 @@ checksums_file="artifacts/SHA256SUMS"
   printf '%s  %s\n' "$firefox_sha256" "$firefox_zip_name"
 } > "$checksums_file"
 
-# The newest stable tag that is not this release's own tag. Without one
-# (first release ever) there is no honest range, so the notes carry no
-# change sections at all instead of invented entries.
+# The newest stable tag below this release's base version (the tag without
+# any prerelease suffix). Without one (first release ever, or a backfilled
+# prerelease with no earlier stable tag) there is no honest range, so the
+# notes carry no change sections at all instead of invented entries. A
+# backfilled prerelease — v3.1.3-beta.2 published after v3.1.5 — must not
+# compare from the repository-wide maximum: v3.1.5 would describe the wrong
+# range, so candidates at or above the base version are dropped first.
 previous_stable_tag() {
-  local refs
+  local base_tag refs
+  base_tag="${release_tag%%-*}"
   refs="$(git ls-remote --tags origin)" || fail "无法列出远端版本标签"
-  printf '%s\n' "$refs" | sed -n 's/^[0-9a-f]*[[:space:]]refs\/tags\/\(.*\)$/\1/p' \
-    | grep -E '^v[0-9]+([.][0-9]+)+$' \
-    | grep -v -x -F -- "$release_tag" \
-    | sort -V | tail -n 1 || true
+  {
+    printf '%s\n' "$refs" | sed -n 's/^[0-9a-f]*[[:space:]]refs\/tags\/\(.*\)$/\1/p' \
+      | grep -E '^v[0-9]+([.][0-9]+)+$' \
+      | grep -v -x -F -- "$release_tag"
+    printf '%s\n' "$base_tag"
+  } | sort -V | awk -v base="$base_tag" '$0 == base { exit } { print }' | tail -n 1 || true
 }
 
 # CHANGE_SECTIONS holds the grouped change entries for the Release body:
@@ -244,7 +251,10 @@ change_sections() {
   [[ -n "$prev_tag" ]] || return 0
   commits_json="$(mktemp)"
   prs_json="$(mktemp)"
-  gh api "repos/${GH_REPO}/compare/${prev_tag}...${BUILD_SHA}" > "$commits_json" \
+  # per_page=100 lifts the compare endpoint's default 30-commit page; more
+  # than one page cannot be followed here, so a still-truncated response is
+  # warned about below instead of silently passing as complete.
+  gh api "repos/${GH_REPO}/compare/${prev_tag}...${BUILD_SHA}?per_page=100" > "$commits_json" \
     || fail "无法读取 ${prev_tag} 到 ${BUILD_SHA} 之间的提交"
   gh pr list --state merged --limit 100 --json number,url,author,mergeCommit > "$prs_json" \
     || fail "无法读取已合并 PR 列表"
@@ -264,6 +274,16 @@ with open(sys.argv[1], encoding="utf-8") as source:
     compare = json.load(source)
 with open(sys.argv[2], encoding="utf-8") as source:
     pulls = json.load(source)
+
+# A compare response can be truncated (one page only); warn on stderr so the
+# gap is visible in the log without leaking into CHANGE_SECTIONS on stdout.
+returned = len(compare.get("commits") or [])
+if compare.get("total_commits", returned) > returned:
+    print(
+        "::warning::compare 只返回 %d/%s 个提交，更新说明可能不完整"
+        % (returned, compare.get("total_commits")),
+        file=sys.stderr,
+    )
 
 merged_pulls = {}
 for pull in pulls if isinstance(pulls, list) else []:

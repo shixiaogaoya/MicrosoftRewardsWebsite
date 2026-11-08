@@ -6,7 +6,7 @@
 import 'package:bloc_test/bloc_test.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:microsoft_automatic_rewards/core/di/SearchCancellationToken.dart';
+import 'package:microsoft_automatic_rewards/core/di/search_cancel_token.dart';
 import 'package:microsoft_automatic_rewards/features/search/domain/repositories/search_repository.dart';
 import 'package:microsoft_automatic_rewards/features/search/domain/useCases/perform_search.dart';
 import 'package:microsoft_automatic_rewards/features/search/presentation/bloc/search_bloc.dart';
@@ -63,6 +63,35 @@ class _FailingRepository implements SearchRepository {
   }
 }
 
+/// 复现「取消后旧轮次失败」：第一次调用等到取消令牌翻转后抛出异常（旧轮次
+/// 的 WebView 调用在取消后仍会失败），之后的调用按 count 上报进度并正常
+/// 返回（取消后立即重试的新轮次）。
+class _OldRoundFailsAfterCancelRepository implements SearchRepository {
+  var calls = 0;
+
+  @override
+  Future<void> performSearches({
+    required int count,
+    required double delay,
+    required SearchCancellationToken cancellationToken,
+    required InAppWebViewController controller,
+    required void Function(int currentCount, int totalCount) onProgress,
+  }) async {
+    calls++;
+    if (calls == 1) {
+      var iterations = 0;
+      while (!cancellationToken.isCancelled && iterations < 1000) {
+        iterations++;
+        await Future<void>.delayed(Duration.zero);
+      }
+      throw StateError('webview failed after cancel');
+    }
+    for (var i = 0; i < count; i++) {
+      onProgress(i + 1, count);
+    }
+  }
+}
+
 void main() {
   final controller = _FakeWebViewController();
 
@@ -106,6 +135,42 @@ void main() {
       expect: () => <Object>[
         SearchInProgress(),
         isA<SearchFailure>(),
+      ],
+    );
+
+    // Bloc 默认并发处理事件，取消后旧轮次的异常可能在新轮次运行期间才抛出。
+    // 此时启动处理器的 catch 必须按本轮令牌丢弃旧轮次的失败，不得覆盖新轮次。
+    blocTest<SearchBloc, SearchState>(
+      '取消后旧轮次抛出异常时，不写出 SearchFailure',
+      build: () => SearchBloc(
+        performSearch: PerformSearch(_OldRoundFailsAfterCancelRepository()),
+      ),
+      act: (bloc) {
+        bloc.add(StartSearchEvent(count: 3, delay: 0, controller: controller));
+        bloc.add(CancelSearchEvent());
+      },
+      expect: () => <Object>[
+        SearchInProgress(),
+        SearchCancelled(),
+      ],
+    );
+
+    blocTest<SearchBloc, SearchState>(
+      '取消后立即重试时，旧轮次的失败不得覆盖新轮次的成功',
+      build: () => SearchBloc(
+        performSearch: PerformSearch(_OldRoundFailsAfterCancelRepository()),
+      ),
+      act: (bloc) {
+        bloc.add(StartSearchEvent(count: 3, delay: 0, controller: controller));
+        bloc.add(CancelSearchEvent());
+        bloc.add(StartSearchEvent(count: 1, delay: 0, controller: controller));
+      },
+      expect: () => <Object>[
+        SearchInProgress(),
+        SearchCancelled(),
+        SearchInProgress(),
+        SearchInProgress(currentCount: 1, totalCount: 1),
+        SearchSuccess(),
       ],
     );
   });

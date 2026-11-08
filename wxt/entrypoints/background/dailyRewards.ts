@@ -58,14 +58,21 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
 
     function onCreated(created: { id?: number; openerTabId?: number }): void {
         if (created.openerTabId !== dashboardId || created.id == null) return;
+        const childTabId = created.id;
         // Keep the dashboard foregrounded so it stays rendered and keeps
         // clicking; the search tab still loads in the background and credits.
-        // Reviewed for A09 and deliberately kept unconditional: whether the
-        // dashboard SPA still renders and keeps clicking from a background tab
-        // is unverified, and dropping the snap-back would trade a working flow
-        // for silence. The end-of-run focus check below is where a user who
-        // switched away is left alone.
-        browser.tabs.update(dashboardId, { active: true }).catch(() => {});
+        // A09: the snap-back is for an uninterrupted run only — the check asks
+        // whether the focus is still with this round (the dashboard itself, or
+        // the search tab that just opened and took the foreground). A user who
+        // switched to another tab keeps the page they chose, as the README
+        // states; whether the SPA keeps clicking from a background tab is
+        // unverified, which is why an uninterrupted run stays foregrounded.
+        void (async () => {
+            const activeTabId = await getActiveTabId();
+            if (activeTabId === dashboardId || activeTabId === childTabId) {
+                browser.tabs.update(dashboardId, { active: true }).catch(() => {});
+            }
+        })();
         closeDailyTabAfterLoad(created.id);
     }
     browser.tabs.onCreated.addListener(onCreated);
@@ -92,7 +99,12 @@ export async function openDailyRewards(runId: number, jobs: DashboardJobs): Prom
             // would stop meaning "the user moved away". Only a user still on
             // the dashboard is sent back to the tab they were on when the round
             // started; one who switched to another tab — or another window —
-            // keeps the page they chose (A09).
+            // keeps the page they chose (A09). Two trade-offs are deliberate:
+            // the read is async, so a user who switches in the short window
+            // between it and the close below is snapped back once — there is no
+            // cheap way to tell that switch from any other — and a failed
+            // query returns undefined, which conservatively skips the restore
+            // and leaves the browser's own neighbour activation in place.
             const stillOnDashboard = await getActiveTabId() === dashboardId;
             await closeOwnedTab(runId, dashboardId);
             if (previousActiveTabId != null && stillOnDashboard) {

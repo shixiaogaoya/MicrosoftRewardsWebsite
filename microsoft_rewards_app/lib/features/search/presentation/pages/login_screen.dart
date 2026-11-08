@@ -108,6 +108,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     if (isSignedInBingUrl(url)) {
                       final prefs = await SharedPreferences.getInstance();
                       await prefs.setBool("loggedIn", true);
+                      // Guard the context across the async gap above: the
+                      // widget may be gone by the time the prefs write lands.
+                      if (!mounted) return;
                       navigateToSearchScreen(context);
                     }
                   },

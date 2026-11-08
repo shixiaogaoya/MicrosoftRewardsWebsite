@@ -52,6 +52,19 @@ describe('waitForMatch', () => {
         expect(((await pending) as HTMLElement)?.tagName).toBe('BUTTON');
     });
 
+    // The claim-flow probes also key on [role="dialog"]: a flyout that turns an
+    // existing node into a dialog via a role edit (not a node insertion) must
+    // still re-run the probe, so role stays in the attribute filter.
+    it('sees a match that appears through a role attribute change on an existing node', async () => {
+        const root = freshRoot();
+        root.innerHTML = '<section></section>';
+        const pending = waitForMatch(() => root.querySelector('[role="dialog"]'), 1000, root);
+
+        root.querySelector('section')!.setAttribute('role', 'dialog');
+
+        expect(((await pending) as HTMLElement)?.tagName).toBe('SECTION');
+    });
+
     it('resolves null when the match never appears, instead of hanging', async () => {
         const root = freshRoot();
 
