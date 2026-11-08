@@ -50,19 +50,10 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
-      # TODO: remove continue-on-error once this job has actually passed on CI.
-      # 2026-11: the last CI analyze run reported 9 issues (search_bloc
-      # cancellation catch, SearchCancellationToken file name, a missing
-      # `mounted` guard, timezone not a direct dependency, avoid_print /
-      # string-interp lints in notification_service). All are addressed on
-      # this branch, and flutter_lints + lints now carry hand-written
-      # pubspec.lock entries with real pub.dev sha256 checksums (no local
-      # Flutter toolchain existed to run the solver). Still no local
-      # toolchain: analyze/test remain unverified until a real CI run
-      # confirms, so this job stays non-blocking; a green overall workflow
-      # does NOT mean the mobile app passes. Check this job's own step status
-      # before treating mobile as verified.
+      # 2026-11: this job is now blocking. The previously reported analyze
+      # issues are fixed, flutter_lints + lints are resolved dependencies
+      # (real pub.dev sha256 checksums in pubspec.lock), the cancellation-path
+      # tests pass, and a real CI run has confirmed flutter analyze and
+      # flutter test green — continue-on-error is removed.
       - run: flutter analyze
-        continue-on-error: true
       - run: flutter test
-        continue-on-error: true
