@@ -2,7 +2,7 @@
   "name": "search-automatic-rewards",
   "description": "Browser extension that runs Microsoft Rewards searches, daily activities, and point claims automatically or with one click.",
   "private": true,
-  "version": "3.1.5",
+  "version": "3.1.6",
   "type": "module",
   "scripts": {
     "dev": "wxt",
