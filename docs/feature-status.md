@@ -11,7 +11,7 @@
 | 类型检查 | ✅ 通过 | `npm --prefix wxt run compile`（tsc --noEmit）。 |
 | 扩展单元测试 | ✅ 通过 | `npm --prefix wxt run test`（Vitest，2026-11-07 为 25 个文件 296 项，覆盖后台任务、调度、识别、弹窗与工具函数；测试文件只放在 `entrypoints/` 子目录，避免被 wxt 当作入口）。 |
 | 发布脚本夹具测试 | ✅ 通过 | 仓库根 `bash .github/scripts/publish-release.test.sh` 与 `publish-cws.test.sh`，全程用桩，不访问真实发布端点；CI 的扩展作业也会执行。 |
-| CI（`ci.yml`） | ✅ 扩展作业阻塞 / ⚠️ 移动作业不阻塞 | 扩展作业**仅在 pull request 触发**，执行夹具测试 + compile + test + 双端 build；master 推送由 `build.yml` 验证（夹具测试 + compile + test + 双端打包），`ci.yml` 绿不代表 master 检查通过。移动作业的 `flutter analyze` 与 `flutter test` 均带 `continue-on-error` 且近期实际失败，**CI 绿不能当作移动端通过**。 |
+| CI（`ci.yml`） | ✅ 扩展作业阻塞 / ✅ 移动作业阻塞 | 扩展作业**仅在 pull request 触发**，执行夹具测试 + compile + test + 双端 build；master 推送由 `build.yml` 验证（夹具测试 + compile + test + 双端打包），`ci.yml` 绿不代表 master 检查通过。移动作业 2026-11-08 起已移除 `continue-on-error` 转为阻塞：`flutter analyze` 零问题、`flutter test` 13 项通过（以步骤级日志核实）。 |
 | 真实浏览器验收 | ⚠️ 部分未做 | 弹窗保存提示、停止/重试真机流程、后台与电脑休眠唤醒、125%/150% 缩放与键盘可达性尚未完成实机验收；真实 Rewards 账号的页面兼容性与积分到账未验证。明细见 README「已知问题与验证范围」。 |
 
 ## 扩展功能（wxt/）
@@ -39,5 +39,5 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 分析与测试 | ⚠️ 本地/CI 均未通过 | CI 中 `flutter analyze`、`flutter test` 带 `continue-on-error` 且近期失败；未完成移动端维护基线（A12：取消不变成功、常亮资源释放、业务测试真实通过）。 |
+| 分析与测试 | ✅ CI 通过 / 本地未运行 | CI 中 `flutter analyze` 零问题、`flutter test` 13 项通过（2026-11-08 起阻塞式验证）；本地维护环境无 Flutter 工具链，从未本地运行。A12 的取消路径、常亮释放与业务测试已由 CI 证实。 |
 | 发布 | ⛔ 未发布 | 无商店渠道；`.apk` 随 GitHub Release 附带的旧流程未恢复。 |

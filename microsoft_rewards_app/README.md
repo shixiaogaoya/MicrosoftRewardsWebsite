@@ -5,7 +5,7 @@ Microsoft Rewards 自动搜索的实验性 Flutter 应用，与 `wxt/` 目录下
 ## 当前支持与维护范围
 
 - **实验模块**：可以运行基本流程，但没有承诺的维护等级；功能或平台行为变化时可能随时失效。
-- **验证状态**：仓库维护环境在 2026-11 的改动时没有可用的 Flutter 工具链，`flutter pub get`、`flutter analyze` 与 `flutter test` 均未在本地运行过。`flutter_lints` 与其唯一传递依赖 `lints` 已按 pub.dev 的真实 sha256 手工补入 `pubspec.lock`（flutter_lints 5.0.0 / lints 5.1.1，与 `pubspec.yaml` 的 `^5.0.0` 约束一致）；这是手工条目而非求解器输出，首次在有工具链的环境运行 `flutter pub get` 时如与求解结果不一致请以工具链为准重新生成。CI（`.github/workflows/ci.yml` 的 `mobile` job）中 `flutter analyze` 与 `flutter test` 仍带 `continue-on-error: true`（最近一次 analyze 实报 9 项，已在本轮全部处理，待真实 CI 复核），整体 CI 绿色**不代表**移动端通过；请查看该 job 自身的步骤状态。
+- **验证状态**：仓库维护环境在 2026-11 的改动时没有可用的 Flutter 工具链，`flutter pub get`、`flutter analyze` 与 `flutter test` 均未在本地运行过。`flutter_lints` 与其唯一传递依赖 `lints` 已按 pub.dev 的真实 sha256 手工补入 `pubspec.lock`（flutter_lints 5.0.0 / lints 5.1.1，与 `pubspec.yaml` 的 `^5.0.0` 约束一致）；这是手工条目而非求解器输出，首次在有工具链的环境运行 `flutter pub get` 时如与求解结果不一致请以工具链为准重新生成。CI（`.github/workflows/ci.yml` 的 `mobile` job）已于 2026-11-08 移除 `continue-on-error` 转为阻塞：`flutter analyze` 零问题、`flutter test` 13 项通过（以步骤级日志为准）。
 - **未固定 Flutter 版本**：CI 使用 stable channel 的最新版，工具链差异可能引入新的分析或测试失败。
 
 ## 功能（以代码为准）

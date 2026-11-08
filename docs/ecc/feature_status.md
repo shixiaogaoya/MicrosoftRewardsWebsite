@@ -34,7 +34,7 @@ Legend: ✅ implemented · 🟡 partial / unclear · ⛔ absent · 🔎 Needs Ve
 | Keep-awake during run | ✅ | `wakelock_plus` dependency present; usage 🔎. |
 | Daily-set automation (like the extensions) | 🔎 | Not confirmed in mobile; may be search-only. |
 | Play Store distribution | 🔎 | Popup links a Play Store id; live status unconfirmed. |
-| Automated tests | ⛔ | Only the default `widget_test.dart`.（迁移前记录；现移动端有 `test/search_bloc_test.dart`，但 `flutter analyze`/`flutter test` 在 CI 带 `continue-on-error` 且近期失败，见 [docs/feature-status.md](../feature-status.md)） |
+| Automated tests | ⛔ | Only the default `widget_test.dart`.（迁移前记录；现移动端有 `test/search_bloc_test.dart`，CI 已于 2026-11-08 转阻塞且 analyze/test 通过，见 [docs/feature-status.md](../feature-status.md)） |
 
 ## Cross-cutting
 
